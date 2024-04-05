@@ -78,15 +78,15 @@ def import_etalab_zip(dbfilename, dirpath='etalab'):
                         df_stasup = df[['STA_NM_ANFR','SUP_ID']]
                         #df_stasup['STASUP_ID'] = df_stasup.index
                         #df_stasup.set_index('STASUP_ID', inplace=True)
-                        df_stasup.to_sql('anfr_stasup', conn, if_exists='replace', index_label='STASUP_ID', dtype={'STASUP_ID': 'INTEGER primary key', 'SUP_ID': 'INTEGER'}) #index=True,
+                        df_stasup.to_sql('anfr_stasup', conn, if_exists='replace', index=False)
 
                         dfsites = df.groupby('COR_DMS', as_index=False)[['COR_DMS','COR_NB_LAT','COR_NB_LON','ADR_LB_ADD','ADR_NM_CP','COM_CD_INSEE']].first()
+                        dfsites.to_sql('anfr_site', conn, if_exists='replace', index_label='SITE_ID', dtype={'SITE_ID': 'INTEGER primary key'}) #index=True,
                         dfsites['SITE_ID'] = dfsites.index # FIXME: +1 ?
                         dfsites.set_index('COR_DMS', inplace=True)
                         df['SITE_ID'] = dfsites.loc[df.COR_DMS].SITE_ID.to_numpy()
-                        dfsites['COR_DMS'] = dfsites.index
-                        dfsites.set_index('SITE_ID', inplace=True)
-                        dfsites.to_sql('anfr_site', conn, if_exists='replace', index_label='SITE_ID', dtype={'SITE_ID': 'INTEGER primary key'}) #index=True, 
+                        #dfsites['COR_DMS'] = dfsites.index
+                        #dfsites.set_index('SITE_ID', inplace=True)
 
                         dfgroup = df.groupby('SUP_ID', as_index=False)
                         df = dfgroup[['NAT_ID', 'SUP_NM_HAUT', 'TPO_ID', 'SITE_ID']].first()
@@ -134,7 +134,7 @@ def import_etalab_zip(dbfilename, dirpath='etalab'):
                         df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}) #, index_col=pk[tablename]
                         # AER_ID is not unique in original ANFR data
                         df_staant = df[['STA_NM_ANFR','AER_ID']]
-                        df_staant.to_sql('anfr_staant', conn, if_exists='replace', index_label='STAANT_ID', dtype={'STAANT_ID': 'INTEGER primary key'}) #index=True, 
+                        df_staant.to_sql('anfr_staant', conn, if_exists='replace', index=False)
                         dfgroup = df.groupby('AER_ID', as_index=False)
                         df = dfgroup[['TAE_ID', 'AER_NB_DIMENSION', 'AER_FG_RAYON', 'AER_NB_AZIMUT', 'AER_NB_ALT_BAS', 'SUP_ID']].first()
                         #df['STA_NM_ANFR_list'] = dfgroup['STA_NM_ANFR'].agg(','.join)['STA_NM_ANFR']
@@ -151,25 +151,13 @@ def create_views(dbfilename):
     with sqlite3.connect(dbfilename) as conn:
         cur = conn.cursor()
         #cur.execute("create view v_support select anfr_support.*, group_concat(sta_nm_anfr,',') sta_nm_anfr_list from anfr_support left outer join anfr_stasup on anfr_stasup.sup_id=anfr_support.SUP_ID group by anfr_support.sup_id")
-        cur.execute(""" create view v_support as
-                        select anfr_support.sup_id, anfr_support.site_id, cor_dms, sup_nm_haut, nat_lb_nom, tpo_lb, sta_nm_anfr_count,sta_nm_anfr_list, aer_id_count,aer_id_list
-                        from anfr_support
-                        inner join (
-                            select anfr_support.sup_id as sid,count(sta_nm_anfr) sta_nm_anfr_count, group_concat(sta_nm_anfr) sta_nm_anfr_list
-                            from anfr_support inner join anfr_stasup on anfr_stasup.sup_id=anfr_support.sup_id
-                            group by anfr_support.sup_id
-                        ) on sid = anfr_support.sup_id
-                        inner join (
-                            select anfr_support.sup_id as sid2, count(aer_id) aer_id_count, group_concat(aer_id) aer_id_list
-                            from anfr_support inner join anfr_antenne on anfr_antenne.sup_id=anfr_support.sup_id
-                            group by anfr_support.sup_id
-                        ) on sid2 = anfr_support.sup_id
-                        inner join anfr_site on anfr_site.site_id=anfr_support.site_id
-                        inner join anfr_id_nature on anfr_id_nature.nat_id=anfr_support.nat_id
-                        inner join anfr_id_proprietaire on anfr_id_proprietaire.tpo_id=anfr_support.tpo_id
-                        group by anfr_support.sup_id """)
+        cur.executescript("""
+                        drop index if exists ix_anfr_stasup_STA_NM_ANFR; create index ix_anfr_stasup_STA_NM_ANFR on anfr_stasup(STA_NM_ANFR);
+                        drop index if exists ix_anfr_stasup_SUP_ID; create index ix_anfr_stasup_SUP_ID on anfr_stasup(SUP_ID);
+                        drop index if exists ix_anfr_staant_STA_NM_ANFR; create index ix_anfr_staant_STA_NM_ANFR on anfr_staant(STA_NM_ANFR);
+                        drop index if exists ix_anfr_staant_AER_ID; create index ix_anfr_staant_AER_ID on anfr_staant(AER_ID);
 
-        cur.execute(""" create view v_support2 as
+                        create view v_support as
                         select anfr_support.sup_id, anfr_support.site_id, cor_dms, sup_nm_haut, nat_lb_nom, tpo_lb, sta_nm_anfr_count,sta_nm_anfr_list, aer_id_count,aer_id_list,tech_count,tech_list
                         from anfr_support
                         inner join (
@@ -186,9 +174,9 @@ def create_views(dbfilename):
                         inner join anfr_site on anfr_site.site_id=anfr_support.site_id
                         inner join anfr_id_nature on anfr_id_nature.nat_id=anfr_support.nat_id
                         inner join anfr_id_proprietaire on anfr_id_proprietaire.tpo_id=anfr_support.tpo_id
-                        group by anfr_support.sup_id """)
+                        group by anfr_support.sup_id;
 
-        cur.execute(""" create view v_antenne as
+                        create view v_antenne as
                         select anfr_antenne.aer_id, sup_id, aer_nb_dimension, aer_fg_rayon, aer_nb_azimut, aer_nb_alt_bas,sta_nm_anfr_count, sta_nm_anfr_list, tae_lb, emr_id_count,emr_id_list,tech_count,tech_list
                         from anfr_antenne
                         inner join (
@@ -204,9 +192,7 @@ def create_views(dbfilename):
                             group by anfr_antenne.aer_id
                         ) on aid2 = anfr_antenne.aer_id
                         inner join anfr_id_type_antenne on anfr_id_type_antenne.tae_id=anfr_antenne.tae_id
-                        group by anfr_antenne.aer_id """)
-        #cur.execute("create view v_antenne as select anfr_antenne.*, group_concat(sta_nm_anfr,',') sta_nm_anfr_list from anfr_antenne left outer join anfr_staant on anfr_staant.aer_id=anfr_antenne.aer_id group by anfr_antenne.aer_id")
-
+                        group by anfr_antenne.aer_id; """)
 
 def create_imtsectors_table(dbfilename, systype="IMT", bbox="lat<52 and lat>42 and lon<9 and lon>-5", dotable=False):
     tabletype = "table" if dotable else "view"
