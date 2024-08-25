@@ -15,13 +15,77 @@ from numpy import round
 import argparse
 import urllib.request as req
 
+IMT_MASK = ['GSM 900', 'GSM 1800', 'UMTS 900', 'UMTS 2100',
+                'LTE 700', 'LTE 800', 'LTE 900', 'LTE 1800', 'LTE 2100', 'LTE 2600',
+                '5G NR 700', '5G NR 1800', '5G NR 2100', '5G NR 3500']
+IMT_OPS = ['ORANGE', 'SFR', 'FREE MOBILE', 'BOUYGUES TELECOM']
+
+def get_sysmask(dbfilename):
+    with sqlite3.connect(dbfilename) as conn:
+        cur = conn.cursor()
+        return [k[0] for k in cur.execute('select EMR_LB_SYSTEME from anfr_id_systeme').fetchall()]
+
+def mask_v_support(dbfilename):
+    with sqlite3.connect(dbfilename) as conn:
+        cur = conn.cursor()
+        global SYSLIST
+        SYSLIST = [k[0] for k in cur.execute('select EMR_LB_SYSTEME from anfr_id_systeme').fetchall()]
+        conn.create_function("mask_low", 1, mask_from_list_low64)
+        conn.create_function("mask_high", 1, mask_from_list_high64)
+        cur.executescript("""drop table if exists gen_support ;
+                             create table gen_support as
+                                    select anfr_support.sup_id, anfr_support.site_id, cor_dms, sup_nm_haut, nat_lb_nom, tpo_lb, sta_nm_anfr_count,sta_nm_anfr_list, aer_id_count,aer_id_list,tech_count,tech_list,
+                                    cor_nb_lat as lat, cor_nb_lon as lon, com_cd_insee insee,
+                                    mask_low(tech_list) bitmask1, mask_high(tech_list) bitmask2
+                                    from anfr_support
+                                    inner join (
+                                        select anfr_support.sup_id as sid,count(sta_nm_anfr) sta_nm_anfr_count, group_concat(sta_nm_anfr) sta_nm_anfr_list
+                                        from anfr_support inner join anfr_stasup on anfr_stasup.sup_id=anfr_support.sup_id
+                                        group by anfr_support.sup_id
+                                    ) on sid = anfr_support.sup_id
+                                    inner join (
+                                        select anfr_support.sup_id as sid2, count(distinct anfr_antenne.aer_id) aer_id_count, group_concat(distinct anfr_antenne.aer_id) aer_id_list,count(distinct emr_lb_systeme) tech_count, group_concat(distinct emr_lb_systeme) tech_list
+                                        from anfr_support inner join anfr_antenne on anfr_antenne.sup_id=anfr_support.sup_id
+                                        inner join anfr_emetteur on anfr_emetteur.aer_id=anfr_antenne.aer_id inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
+                                        group by anfr_support.sup_id
+                                    ) on sid2 = anfr_support.sup_id
+                                    inner join anfr_site on anfr_site.site_id=anfr_support.site_id
+                                    inner join anfr_id_nature on anfr_id_nature.nat_id=anfr_support.nat_id
+                                    inner join anfr_id_proprietaire on anfr_id_proprietaire.tpo_id=anfr_support.tpo_id
+                                    group by anfr_support.sup_id;""")
+
+def mask_from_list_low64(strlist, masklist=None):
+    if masklist is None: masklist = SYSLIST
+    mask = 0
+    for entry in strlist.split(','):
+        mask |= (1<<masklist.index(entry))
+    return mask128_low64(mask)
+def mask_from_list_high64(strlist, masklist=None):
+    if masklist is None: masklist = SYSLIST
+    mask = 0
+    for entry in strlist.split(','):
+        mask |= (1<<masklist.index(entry))
+    return mask128_high64(mask)
+
+def list_from_mask(mask, masklist=None):
+    if masklist is None: masklist = SYSLIST
+    alist = []
+    for bit in range(len(masklist)):
+        if mask & (1<<bit):
+            alist.append(masklist[bit])
+    return ','.join(alist)
+
+def mask128_low64(mask128): return mask128 & ((1<<63)-1)  # 63 because sqlite does not deal well with unsigned 64 ints
+def mask128_high64(mask128): return mask128 >> 63
+def masks64_to_mask128(mask_low, mask_high): return mask_low | (mask_high << 63)
+
 def download_data(dirpath='etalab'):
     # From https://www.data.gouv.fr/fr/datasets/donnees-sur-les-installations-radioelectriques-de-plus-de-5-watts-1/
     if not exists(dirpath):
         makedirs(dirpath)
     URLS = {
-        "etalab_stations.zip": "https://www.data.gouv.fr/fr/datasets/r/8500e7f6-ffcd-4c09-840e-2eadd414130e",
-        "etalab_stations_ids.zip": "https://www.data.gouv.fr/fr/datasets/r/78e112c9-1958-4e58-8762-1568192517e5",
+        "etalab_stations.zip": "https://www.data.gouv.fr/fr/datasets/r/f7f7eb27-f3dd-412a-93a6-d2754928c664",
+        "etalab_stations_ids.zip": "https://www.data.gouv.fr/fr/datasets/r/6f08a4bc-6f72-498e-a945-b48db94fa519",
         "densites.xlsx": "https://www.insee.fr/fr/statistiques/fichier/6439600/grille_densite_7_niveaux_2023.xlsx" # https://www.insee.fr/fr/information/6439600
     }
     for k,v in URLS.items():
@@ -42,7 +106,8 @@ def import_cities(dbfilename, dirpath="etalab"):
 
 def import_etalab_zip(dbfilename, dirpath='etalab'):
     """Import data from zipped files from data.gouv.fr into a local SQLite DB, with some refinements (e.g. convert DMS coordinates to linear)"""
-    remove (dbfilename)
+    if exists(dbfilename):
+        remove (dbfilename)
     with sqlite3.connect(dbfilename) as conn:
         cur = conn.cursor()
         for myzipfile in glob(dirpath + sep + "*etalab*.zip"): # [dirpath + sep + x for x in listdir(dirpath) if x.endswith('.zip')]:
@@ -109,8 +174,8 @@ def import_etalab_zip(dbfilename, dirpath='etalab'):
                         dfsys.to_sql('anfr_id_systeme', conn, if_exists='replace', index_label='SYS_ID', dtype={'SYS_ID': 'INTEGER primary key'}) #index=True,
                         dfsys['SYS_ID'] = dfsys.index
                         dfsys.set_index('EMR_LB_SYSTEME', inplace=True)
-                        df['SYS_ID']=dfsys.loc[df.EMR_LB_SYSTEME].SYS_ID.to_numpy()
-                        del df['EMR_LB_SYSTEME'], df['STA_NM_ANFR'] # FIXME: need some SUP_ID
+                        df['SYS_ID']=dfsys.loc[df.EMR_LB_SYSTEME].SYS_ID.to_numpy() # FIXME: replace "NULL" entry in systemes
+                        del df['EMR_LB_SYSTEME']
                     elif tablename=='anfr_bande':
                         df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}) #, index_col=pk[tablename]
                         df['unit'] = 0
@@ -145,7 +210,7 @@ def import_etalab_zip(dbfilename, dirpath='etalab'):
                     cur.execute("drop table if exists " + tablename)
                     df.columns = list(map(lambda x: x.lower(), df.columns))
                     df.to_sql(tablename, conn, if_exists='replace', index_label=pk[tablename], dtype={pk[tablename]: 'INTEGER primary key'})
-    create_views(dbfilename)
+    #create_views(dbfilename)
 
 def create_views(dbfilename):
     with sqlite3.connect(dbfilename) as conn:
@@ -192,7 +257,31 @@ def create_views(dbfilename):
                             group by anfr_antenne.aer_id
                         ) on aid2 = anfr_antenne.aer_id
                         inner join anfr_id_type_antenne on anfr_id_type_antenne.tae_id=anfr_antenne.tae_id
-                        group by anfr_antenne.aer_id; """)
+                        group by anfr_antenne.aer_id;
+
+
+                        create table t_rop as
+                        select anfr_site.site_id, anfr_antenne.sup_id, anfr_antenne.aer_id, aer_nb_azimut azh, aer_nb_alt_bas h, cor_dms, cor_nb_lat as lat, cor_nb_lon as lon, com_cd_insee insee , sta_nm_anfr_list stations, emr_id_list emetteurs,tech_list techs, op_list ops, sta_nm_anfr_count, emr_id_count, tech_count, op_count
+                        from anfr_antenne
+                        inner join (
+                            select anfr_antenne.aer_id as aid,count(anfr_staant.sta_nm_anfr) sta_nm_anfr_count, group_concat(anfr_staant.sta_nm_anfr) sta_nm_anfr_list ,group_concat(adm_lb_nom) op_list, count(adm_lb_nom) op_count
+                            from anfr_antenne inner join anfr_staant on anfr_staant.aer_id=anfr_antenne.aer_id
+                            inner join anfr_station on anfr_station.sta_nm_anfr=anfr_staant.STA_NM_ANFR
+                            inner join anfr_id_exploitant on anfr_station.adm_id=anfr_id_exploitant.adm_id
+                            group by anfr_antenne.aer_id
+                        ) on aid = anfr_antenne.aer_id
+                        inner join (
+                            select anfr_antenne.aer_id as aid2,count(emr_id) emr_id_count, group_concat(emr_id) emr_id_list,
+                            count(distinct emr_lb_systeme) tech_count, group_concat(distinct emr_lb_systeme) tech_list
+                            from anfr_antenne inner join anfr_emetteur on anfr_emetteur.aer_id=anfr_antenne.aer_id
+                            inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
+                            group by anfr_antenne.aer_id
+                        ) on aid2 = anfr_antenne.aer_id
+                        inner join anfr_support on anfr_support.sup_id=anfr_antenne.sup_id
+                        inner join anfr_site on anfr_site.SITE_ID=anfr_support.site_id
+                        group by anfr_antenne.aer_id
+                        having tech_list like 'GSM %' or tech_list like 'UMTS %' or tech_list like 'LTE %' or tech_list like '5G %'
+                        """)
 
 def create_imtsectors_table(dbfilename, systype="IMT", bbox="lat<52 and lat>42 and lon<9 and lon>-5", dotable=False):
     tabletype = "table" if dotable else "view"
@@ -228,11 +317,12 @@ def create_imtsectors_table(dbfilename, systype="IMT", bbox="lat<52 and lat>42 a
             select anfr_emetteur.emr_id sectorid, dem_nm_comsis comsis,
             anfr_support.sup_id siteid, anfr_station.sta_nm_anfr sta_anfr,
             aer_nb_alt_bas h, sup_nm_haut h2, (ban_nb_f_deb+ban_nb_f_fin)/2e6 freq_mhz,
-            (ban_nb_f_fin-ban_nb_f_deb)/1e6 bw_mhz,
+            (ban_nb_f_fin-ban_nb_f_deb)/1e3 bw_mhz,
             aer_nb_azimut azh, com_cd_insee insee, cor_dms as dms,
             cor_nb_lat as lat, cor_nb_lon as lon, emr_lb_systeme tech,
             adm_lb_nom op, tpo_lb op2, nat_lb_nom as sup_type
             from anfr_bande
+            inner join anfr_id_band on anfr_bande.ban_id=anfr_id_band.BAN_ID
             inner join anfr_emetteur on anfr_bande.emr_id=anfr_emetteur.emr_id
             inner join anfr_antenne on anfr_emetteur.aer_id=anfr_antenne.aer_id
             inner join anfr_support on anfr_antenne.sup_id=anfr_support.sup_id
@@ -240,7 +330,7 @@ def create_imtsectors_table(dbfilename, systype="IMT", bbox="lat<52 and lat>42 a
             inner join anfr_id_exploitant on anfr_station.adm_id=anfr_id_exploitant.adm_id
             inner join anfr_id_proprietaire on anfr_support.tpo_id=anfr_id_proprietaire.tpo_id
             inner join anfr_id_nature on anfr_support.nat_id=anfr_id_nature.nat_id
-            -- inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
+            inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
             {sqlwhere}
             group by sectorid;
         ''') # null as id, null as pow, null as tilt, null as aer, 0 alt, ban_nb_f_deb fmin,ban_nb_f_fin fmax, # inner join cities on com_cd_insee=cities.insee
