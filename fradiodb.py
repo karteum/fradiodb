@@ -16,6 +16,8 @@ import argparse
 import urllib.request as req
 import sys
 
+# Schema diagram: d2 ./schema.d2 -s -t 100
+
 #def sanitycheck(dbfilename):
     # select * from anfr_support where sup_id not in (select sup_id from anfr_antenne)
     # select * from anfr_emetteur where aer_id not in (select aer_id from anfr_antenne)
@@ -60,9 +62,9 @@ def coalesce_freqs(df):
     for k in emrbands.keys():
         for fc in emrbands[k]:
             res.append([k , int(fc.real), int(fc.imag)])
-    return pd.DataFrame(data=res, columns=["EMR_ID","BAN_NB_F_DEB","BAN_NB_F_FIN"])
+    return pd.DataFrame(data=res, columns=["transmitter_id","fmin_kHz","fmax_kHz"])
 
-def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=True):
+def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
     """Import data from zipped files from data.gouv.fr into a local SQLite DB, with some refinements (e.g. convert DMS coordinates to linear)"""
     if exists(dbfilename):
         remove (dbfilename)
@@ -72,133 +74,145 @@ def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=True):
             with zipfile.ZipFile(myzipfile) as zFile:
                 for csvfile in zFile.infolist():
                     print("importing " + csvfile.filename)
-                    tablename = splitext(basename(csvfile.filename))[0].lower()
-                    tablename = tablename.replace('sup_', 'anfr_id_' if tablename in ('sup_exploitant','sup_nature','sup_proprietaire','sup_type_antenne') else 'anfr_')
-                    pk = {'anfr_support': 'SUP_ID',
-                          'anfr_antenne': 'AER_ID',
-                          'anfr_station': 'DEM_NM_COMSIS',
-                          'anfr_emetteur': 'EMR_ID',
-                          'anfr_bande': 'BAN_ID',
-                          'anfr_id_exploitant': 'ADM_ID',
-                          'anfr_id_nature' : 'NAT_ID',
-                          'anfr_id_proprietaire' : 'TPO_ID',
-                          'anfr_id_type_antenne' : 'TAE_ID'
-                        }
-                    #if tablename!='anfr_bande': continue
-                    if(tablename == 'anfr_support'):
-                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", encoding='iso8859-1', dtype={"STA_NM_ANFR": str, "NAT_ID": 'Int64', "TPO_ID": 'Int64', 'COM_CD_INSEE': str, 'ADR_NM_CP': 'Int64'}) # "COM_CD_INSEE": 'Int64'} #index_col=pk[tablename],
-                        df['COR_NB_LAT'] = round(((df.COR_CD_NS_LAT=='N')*2-1) * (df.COR_NB_DG_LAT + df.COR_NB_MN_LAT/60 + df.COR_NB_SC_LAT/3600), 4)
-                        df['COR_NB_LON'] = round(((df.COR_CD_EW_LON=='E')*2-1) * (df.COR_NB_DG_LON + df.COR_NB_MN_LON/60 + df.COR_NB_SC_LON/3600), 4)
-                        df['COR_DMS'] = (df.COR_NB_DG_LAT.map(str) + '°' + df.COR_NB_MN_LAT.map(str) + "'" + df.COR_NB_SC_LAT.map(str) + '"' + df.COR_CD_NS_LAT + ' ' +
-                                         df.COR_NB_DG_LON.map(str) + "°" + df.COR_NB_MN_LON.map(str) + "'" + df.COR_NB_SC_LON.map(str) + '"' + df.COR_CD_EW_LON)
-                        df['ADR_LB_ADD'] = df.ADR_LB_LIEU.str.cat(df[["ADR_LB_ADD1", "ADR_LB_ADD2", "ADR_LB_ADD3"]], sep=', ', na_rep='¤').str.replace(', ¤', '').str.replace('¤, ', '')
+                    table_rename = {'sup_exploitant': 'id_operators',
+                                    'sup_nature': 'id_support_types',
+                                    'sup_proprietaire': 'id_support_owners',
+                                    'sup_type_antenne': 'id_antenna_types',
+                                    'sup_bande': 'id_bands',
+                                    'sup_antenne': 'antennas',
+                                    'sup_support': 'supports',
+                                    'sup_station': 'stations',
+                                    'sup_emetteur': 'transmitters' }
+                    tablename = table_rename[splitext(basename(csvfile.filename))[0].lower()]
+                    #if tablename!='supports': continue
+                    if tablename == 'supports':
+                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", encoding='iso8859-1', index_col="SUP_ID", dtype={"STA_NM_ANFR": str, "NAT_ID": 'Int64', "TPO_ID": 'Int64', 'COM_CD_INSEE': str, 'ADR_NM_CP': 'Int64'}) # "COM_CD_INSEE": 'Int64'} #index_col=pk[tablename],
+                        df.rename(columns={"ADR_NM_CP": "postcode", "COM_CD_INSEE": "inseecode", "NAT_ID": "suptype_id", "SUP_NM_HAUT": "sup_height", "TPO_ID": "owner_id", 'STA_NM_ANFR': "station_name"}, inplace=True)
+                        df['lat'] = round(((df.COR_CD_NS_LAT=='N')*2-1) * (df.COR_NB_DG_LAT + df.COR_NB_MN_LAT/60 + df.COR_NB_SC_LAT/3600), 4)
+                        df['lon'] = round(((df.COR_CD_EW_LON=='E')*2-1) * (df.COR_NB_DG_LON + df.COR_NB_MN_LON/60 + df.COR_NB_SC_LON/3600), 4)
+                        df['dms'] = (df.COR_NB_DG_LAT.map(str) + '°' + df.COR_NB_MN_LAT.map(str) + "'" + df.COR_NB_SC_LAT.map(str) + '"' + df.COR_CD_NS_LAT + ' ' +
+                                     df.COR_NB_DG_LON.map(str) + "°" + df.COR_NB_MN_LON.map(str) + "'" + df.COR_NB_SC_LON.map(str) + '"' + df.COR_CD_EW_LON)
+                        df['address'] = df.ADR_LB_LIEU.str.cat(df[["ADR_LB_ADD1", "ADR_LB_ADD2", "ADR_LB_ADD3"]], sep=', ', na_rep='¤').str.replace(', ¤', '').str.replace('¤, ', '').str.title()
                         del df['COR_CD_NS_LAT'], df['COR_NB_DG_LAT'], df['COR_NB_MN_LAT'], df['COR_NB_SC_LAT'], df['COR_CD_EW_LON'], df['COR_NB_DG_LON'], df['COR_NB_MN_LON'], df['COR_NB_SC_LON'], df['ADR_LB_ADD1'], df['ADR_LB_ADD2'], df['ADR_LB_ADD3'], df['ADR_LB_LIEU']
 
                         # SUP_ID is not unique in original ANFR data: one support may host several stations, but also (for historical reasons) one station may be declared with several supports
-                        #df_stasup = df[['STA_NM_ANFR','SUP_ID']]
-                        #df_stasup.to_sql('gen_stasup', conn, if_exists='replace', index=False)  # FIXME: stasup useless since info is in anfr_emetteur ?
+                        # FIXME: not needed ?
+                        df_stasup = df[['station_name']].copy()
+                        df_stasup['sup_id'] = df_stasup.index
+                        df_stasup.to_sql('legacy_stasup', conn, if_exists='replace', index=False)  # FIXME: stasup useless since info is in anfr_emetteur ?
 
-                        # FIXME: check whether TPO_ID ought to be moved in dfsites (are there any sites with multiple supports from different owners ?)
-                        dfsites = df.groupby('COR_DMS', as_index=False)[['COR_DMS','COR_NB_LAT','COR_NB_LON','ADR_LB_ADD','ADR_NM_CP','COM_CD_INSEE']].first()
-                        dfsites.to_sql('anfr_site', conn, if_exists='replace', index_label='SITE_ID', dtype={'SITE_ID': 'INTEGER primary key'}) #index=True,
-                        dfsites['SITE_ID'] = dfsites.index # FIXME: +1 ?
-                        dfsites.set_index('COR_DMS', inplace=True)
-                        df['SITE_ID'] = dfsites.loc[df.COR_DMS].SITE_ID.to_numpy()
-                        #dfsites['COR_DMS'] = dfsites.index
-                        #dfsites.set_index('SITE_ID', inplace=True)
+                        # FIXME: original data have an issue because there are 1338 sites that have near-duplicates (i.e. same coordinates but different "address" informations that would need to be merged)
+                        # select group_concat(id),dms,group_concat(address, '__¤__'),group_concat(postcode, '__¤__'),group_concat(inseecode, '__¤__'), count(dms) c from supports_tmp group by dms having c>1
+                        #dfsites1 = df[['dms','lat','lon','address','postcode','inseecode']].drop_duplicates()
+                        dfsites = df.groupby('dms', as_index=False)[['dms','lat','lon','address','postcode','inseecode']].first()
+                        #diff = pd.concat([dfsites,dfsites2]).drop_duplicates(keep=False)
+                        #dfsites = df.groupby('dms', as_index=False).agg({'address': ' ¤¤ '.join, 'lat': "min", 'lon': "min", 'postcode': "min", 'inseecode': "min"})
+                        dfsites.index.name = "id"
+                        dfsites.to_sql('sites', conn, if_exists='replace', index_label='id', dtype={'id': 'INTEGER primary key'}) #index=True,
+                        dfsites['site_id'] = dfsites.index # FIXME: +1 ?
+                        dfsites.set_index('dms', inplace=True)
+                        df['site_id'] = dfsites.loc[df.dms].site_id.to_numpy()
 
-                        dfgroup = df.groupby('SUP_ID', as_index=False)
-                        df = dfgroup[['NAT_ID', 'SUP_NM_HAUT', 'TPO_ID', 'SITE_ID']].first()
+                        #df1 = df.groupby('id', as_index=False)[['suptype_id', 'sup_height', 'owner_id', 'site_id']].first()
                         #df['STA_NM_ANFR_list'] = dfgroup['STA_NM_ANFR'].agg(','.join)['STA_NM_ANFR']
-                        df.set_index('SUP_ID', inplace=True)
-                        #print(dfgroup[dfgroup[['NAT_ID', 'SUP_NM_HAUT', 'TPO_ID', 'COR_DMS']].nunique().ne(1)])
-                        #df = dfgroup.agg(','.join)
-                    elif(tablename == 'anfr_station'):
-                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}, parse_dates=['DTE_IMPLANTATION', 'DTE_MODIF'], index_col=pk[tablename], dayfirst=True) #date_format='DD/MM/YYYY', infer_datetime_format=True
+                        #df.set_index('SUP_ID', inplace=True)
+                        df = df[['suptype_id', 'sup_height', 'owner_id', 'site_id']].drop_duplicates()
+                    elif tablename == 'stations':
+                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}, parse_dates=['DTE_IMPLANTATION', 'DTE_MODIF'], index_col="DEM_NM_COMSIS", dayfirst=True) #date_format='DD/MM/YYYY', infer_datetime_format=True
                         df['DTE_EN_SERVICE'] = pd.to_datetime(df.DTE_EN_SERVICE, dayfirst=True, errors='coerce') # FIXME: do it more elegantly
-                    elif(tablename == 'anfr_emetteur'):
-                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}, parse_dates=['EMR_DT_SERVICE'], index_col=pk[tablename], dayfirst=True) #infer_datetime_format=True,
-                        # systemes = df.groupby('EMR_LB_SYSTEME').size().keys()
-                        # df['SYS_ID']=df.EMR_LB_SYSTEME.apply(lambda k: systemes.get_loc(k)+1 if pd.notna(k) else None).astype(pd.Int64Dtype())
-                        # del df['EMR_LB_SYSTEME'], df['STA_NM_ANFR'] # FIXME: need some SUP_ID
-                        # dfsys=pd.DataFrame(systemes)
-                        # dfsys['SYS_ID'] = dfsys.index + 1
-                        # dfsys = dfsys[['SYS_ID', 'EMR_LB_SYSTEME']]
+                        df.rename(columns={"STA_NM_ANFR": "station_name", "ADM_ID": "operator_id", "DTE_IMPLANTATION": "date_created", "DTE_MODIF": "date_modified", "DTE_EN_SERVICE": "date_operational"}, inplace=True)
+                    elif tablename == 'transmitters':
+                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}, parse_dates=['EMR_DT_SERVICE'], index_col="EMR_ID", dayfirst=True) #infer_datetime_format=True,
+                        df.rename(columns={"STA_NM_ANFR": "station_name", "AER_ID": "antenna_id", "EMR_DT_SERVICE": "date_switchedon", "EMR_LB_SYSTEME": "system"}, inplace=True)
                         # FIXME: one transceiver to mutiple antennas <-> one antenna to multiple transmitters ?
-                        dfsys = df[['EMR_LB_SYSTEME']].drop_duplicates().sort_values(by='EMR_LB_SYSTEME').reset_index(drop=True)
-                        dfsys.to_sql('anfr_id_systeme', conn, if_exists='replace', index_label='SYS_ID', dtype={'SYS_ID': 'INTEGER primary key'}) #index=True,
-                        dfsys['SYS_ID'] = dfsys.index
-                        dfsys.set_index('EMR_LB_SYSTEME', inplace=True)
-                        df['SYS_ID']=dfsys.loc[df.EMR_LB_SYSTEME].SYS_ID.to_numpy() # FIXME: replace "NULL" entry in systemes
-                        del df['EMR_LB_SYSTEME']
-                    elif tablename=='anfr_bande':
+                        dfsys = df[['system']].drop_duplicates().sort_values(by='system').reset_index(drop=True)
+                        dfsys.index.name = "id"
+                        dfsys.to_sql('id_systems', conn, if_exists='replace', index_label='id', dtype={'id': 'INTEGER primary key'}) #index=True,
+                        dfsys['system_id'] = dfsys.index
+                        dfsys.set_index('system', inplace=True)
+                        df['system_id']=dfsys.loc[df.system].system_id.to_numpy() # FIXME: replace "NULL" entry in systemes
+                        del df['system']
+                    elif tablename=='id_bands':
                         df_banemr = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", usecols=["EMR_ID","BAN_NB_F_DEB","BAN_NB_F_FIN","BAN_FG_UNITE"]) #, index_col=pk[tablename], dtype={"STA_NM_ANFR": str, 'EMR_ID':'Int64'}
+                        df.rename(columns={"STA_NM_ANFR": "station_name", "BAN_ID": "transmitter_band_id", "EMR_ID": "transmitter_id"}, inplace=True)
                         #del df['STA_NM_ANFR']   # anfr_bande already includes a field EMR_ID, and anfr_emetteur already has the correspondance EMR_ID<->STA_NM_ANFR (where an EMR_ID is associated to one and only one )
                         df_banemr['unit'] = 0
                         df_banemr.loc[df_banemr.BAN_FG_UNITE=='K', 'unit'] = 1   #1e3
                         df_banemr.loc[df_banemr.BAN_FG_UNITE=='M', 'unit'] = 1e3 #1e6
                         df_banemr.loc[df_banemr.BAN_FG_UNITE=='G', 'unit'] = 1e6 #1e9
-                        df_banemr['BAN_NB_F_DEB'] = round(df_banemr.BAN_NB_F_DEB * df_banemr.unit).astype(pd.Int64Dtype())
-                        df_banemr['BAN_NB_F_FIN'] = round(df_banemr.BAN_NB_F_FIN * df_banemr.unit).astype(pd.Int64Dtype())
-                        del df_banemr['BAN_FG_UNITE'], df_banemr['unit']
+                        df_banemr['fmin_kHz'] = round(df_banemr.BAN_NB_F_DEB * df_banemr.unit).astype(pd.Int64Dtype())
+                        df_banemr['fmax_kHz'] = round(df_banemr.BAN_NB_F_FIN * df_banemr.unit).astype(pd.Int64Dtype())
+                        del df_banemr['BAN_FG_UNITE'], df_banemr['unit'], df_banemr['BAN_NB_F_DEB'], df_banemr['BAN_NB_F_FIN']
                         if coalesce:
                             df_banemr = coalesce_freqs(df_banemr) # A little bit long to compute, but this removes ~24000 useless/duplicate entries
-                        #df.rename(columns={'BAN_ID': 'BANEMR_ID'}, inplace=True)
-                        #df.set_index('BANEMR_ID', inplace=True)
-                        df= df_banemr[['BAN_NB_F_DEB', 'BAN_NB_F_FIN']].drop_duplicates().sort_values(by='BAN_NB_F_DEB').reset_index(drop=True)
-                        #df.to_sql('anfr_id_band', conn, if_exists='replace', index_label='BAN_ID', dtype={'BAN_ID': 'INTEGER primary key'})
-                        df['BANSTR'] = df['BAN_NB_F_DEB'].astype(str) + '_' + df['BAN_NB_F_FIN'].astype(str)
-                        df['BAN_ID'] = df.index
+                        df = df_banemr[['fmin_kHz', 'fmax_kHz']].drop_duplicates().sort_values(by='fmin_kHz').reset_index(drop=True)
+                        df['BANSTR'] = df['fmin_kHz'].astype(str) + '_' + df['fmax_kHz'].astype(str)
+                        df['band_id'] = df.index
                         df.set_index('BANSTR', inplace=True)
-                        df_banemr['BANSTR'] = df_banemr['BAN_NB_F_DEB'].astype(str) + '_' + df_banemr['BAN_NB_F_FIN'].astype(str)
-                        df_banemr['BAN_ID'] = df.loc[df_banemr.BANSTR].BAN_ID.to_numpy()
-                        del df_banemr['BANSTR'], df_banemr['BAN_NB_F_DEB'], df_banemr['BAN_NB_F_FIN']
-                        df_banemr.to_sql('anfr_banemr', conn, if_exists='replace', index=False)
-                        #df.reset_index(inplace=True)
-                        df.set_index('BAN_ID', inplace=True)
-                    elif tablename=='anfr_antenne':
+                        df_banemr['BANSTR'] = df_banemr['fmin_kHz'].astype(str) + '_' + df_banemr['fmax_kHz'].astype(str)
+                        df_banemr['band_id'] = df.loc[df_banemr.BANSTR].band_id.to_numpy()
+                        del df_banemr['BANSTR'], df_banemr['fmin_kHz'], df_banemr['fmax_kHz']
+                        df_banemr.to_sql('transmitters_bands', conn, if_exists='replace', index=False)
+                        df.set_index('band_id', inplace=True)
+                    elif tablename=='antennas':
                         df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}) #, index_col=pk[tablename]
-                        # AER_ID is not unique in original ANFR data
-                        df_staant = df[['STA_NM_ANFR','AER_ID']]
-                        df_staant.to_sql('anfr_staant', conn, if_exists='replace', index=False)
-                        dfgroup = df.groupby('AER_ID', as_index=False)
-                        df = dfgroup[['TAE_ID', 'AER_NB_DIMENSION', 'AER_FG_RAYON', 'AER_NB_AZIMUT', 'AER_NB_ALT_BAS', 'SUP_ID']].first()
+                        df.rename(columns={"AER_ID": "antenna_id", "STA_NM_ANFR": "station_name", "TAE_ID": "anttype_id", "AER_NB_DIMENSION": "dimension", "AER_NB_AZIMUT": "azimuth", "AER_FG_RAYON": "dim_type", "AER_NB_ALT_BAS": "ant_height"}, inplace=True)
+                        # AER_ID is not unique in original ANFR data. FIXME: is STAANT needed ?
+                        df_staant = df[['station_name','antenna_id']]
+                        df_staant.to_sql('legacy_staant', conn, if_exists='replace', index=False)
+                        #dfgroup = df.groupby('AER_ID', as_index=False)
+                        #df = dfgroup[['TAE_ID', 'AER_NB_DIMENSION', 'AER_FG_RAYON', 'AER_NB_AZIMUT', 'AER_NB_ALT_BAS', 'SUP_ID']].first()
+                        df.set_index('antenna_id', inplace=True)
+                        df = df[["anttype_id", "dimension", "dim_type", "azimuth", "ant_height", "SUP_ID"]].drop_duplicates()
                         #df['STA_NM_ANFR_list'] = dfgroup['STA_NM_ANFR'].agg(','.join)['STA_NM_ANFR']
-                        df.set_index('AER_ID', inplace=True)
-                    else: # id_*
-                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}, index_col=pk[tablename])
+                    elif tablename=='id_operators':
+                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}, index_col='ADM_ID')
+                        df.rename(columns={"ADM_LB_NOM": "operator"}, inplace=True)
+                    elif tablename=='id_support_types':
+                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}, index_col='NAT_ID')
+                        df.rename(columns={"NAT_LB_NOM": "support_type"}, inplace=True)
+                    elif tablename=='id_support_owners':
+                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}, index_col='TPO_ID')
+                        df.rename(columns={"TPO_LB": "support_owner"}, inplace=True)
+                    elif tablename=='id_antenna_types':
+                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}, index_col='TAE_ID')
+                        df.rename(columns={"TAE_LB": "antenna_type"}, inplace=True)
+                    else:
+                        print(f"Unknown type {tablename}")
 
                     cur.execute("drop table if exists " + tablename)
                     df.columns = list(map(lambda x: x.lower(), df.columns))
-                    df.to_sql(tablename, conn, if_exists='replace', index_label=pk[tablename], dtype={pk[tablename]: 'INTEGER primary key'})
+                    df.index.name = "id"
+                    #df.to_sql(tablename, conn, if_exists='replace', index_label=pk[tablename], dtype={pk[tablename]: 'INTEGER primary key'})
+                    df.to_sql(tablename, conn, if_exists='replace', index_label="id", dtype={"id": 'INTEGER primary key'})
     #create_views(dbfilename)
 
 def gen_sites(dbfilename):
     with sqlite3.connect(dbfilename) as conn:
         cur = conn.cursor()
         global SYSLIST
-        SYSLIST = [k[0] for k in cur.execute('select EMR_LB_SYSTEME from anfr_id_systeme').fetchall()]
+        SYSLIST = [k[0] for k in cur.execute('select system from id_systems').fetchall()]
         conn.create_function("mask_low", 1, mask_from_list_low64)
         conn.create_function("mask_high", 1, mask_from_list_high64)
         print("gen_sites")
         cur.executescript("""drop table if exists gen_sites ;
                              create table gen_sites as
-                                select anfr_site.site_id, anfr_site.cor_dms, cor_nb_lon lon, cor_nb_lat lat,
-                                count(distinct anfr_support.sup_id) support_count,group_concat(distinct anfr_support.sup_id) support_list, max(sup_nm_haut) h_max,
-                                count(distinct sta_nm_anfr) sta_count, group_concat(distinct sta_nm_anfr) sta_list,
-                                count(distinct anfr_antenne.aer_id) aer_count, group_concat(distinct anfr_antenne.aer_id) aer_list,
-                                count(distinct emr_lb_systeme) tech_count, group_concat(distinct emr_lb_systeme) tech_list,
-                                count(distinct anfr_emetteur.emr_id) emr_count, group_concat(distinct anfr_emetteur.emr_id) emr_list,
-                                count(distinct ban_id) band_count,group_concat(distinct ban_id) band_list,
-                                com_cd_insee insee, 0 as bitmask1, 0 as bitmask2
+                                select sites.id, sites.dms, lon, lat,
+                                count(distinct supports.id) support_count, group_concat(distinct supports.id) support_list, max(sup_height) h_max,
+                                count(distinct station_name) sta_count, group_concat(distinct station_name) sta_list,
+                                count(distinct antennas.id) ant_count, group_concat(distinct antennas.id) ant_list,
+                                count(distinct system) tech_count, group_concat(distinct system) tech_list,
+                                count(distinct transmitters.id) tx_count, group_concat(distinct transmitters.id) tx_list,
+                                count(distinct transmitters_bands.band_id) band_count,group_concat(distinct transmitters_bands.band_id) band_list,
+                                inseecode, 0 as bitmask1, 0 as bitmask2
 
-                                from anfr_site
-                                inner join anfr_antenne on anfr_antenne.sup_id=anfr_support.sup_id
-                                inner join anfr_support on anfr_site.SITE_ID=anfr_support.site_id
-                                inner join anfr_emetteur on anfr_emetteur.aer_id=anfr_antenne.aer_id
-                                inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
-                                inner join anfr_banemr on anfr_banemr.emr_id=anfr_emetteur.emr_id
-                                group by anfr_site.site_id;
+                                from sites
+                                inner join antennas on antennas.sup_id=supports.id
+                                inner join supports on sites.id=supports.site_id
+                                inner join transmitters on transmitters.antenna_id=antennas.id
+                                inner join id_systems on transmitters.system_id=id_systems.id
+                                inner join transmitters_bands on transmitters_bands.transmitter_id=transmitters.id
+                                group by sites.id;
 
                              update gen_sites set bitmask1=mask_low(tech_list);
                              update gen_sites set bitmask2=mask_high(tech_list);
@@ -216,22 +230,22 @@ def gen_sites(dbfilename):
         print("gen_sectors")
         cur.executescript("""drop table if exists gen_sectors ;
                              create table gen_sectors as
-                                select anfr_antenne.aer_id, aer_nb_azimut, aer_nb_alt_bas, cor_nb_lon lon, cor_nb_lat lat, anfr_antenne.sup_id,
-                                sup_nm_haut h, anfr_emetteur.sta_nm_anfr,adm_lb_nom,
-                                count(distinct emr_lb_systeme) tech_count, group_concat(distinct emr_lb_systeme) tech_list,
-                                count(distinct anfr_emetteur.emr_id) emr_id_count, group_concat(distinct anfr_emetteur.emr_id) emr_id_list,
-                                count(distinct ban_id) band_count,group_concat(distinct ban_id) band_list,
+                                select antennas.id, azimuth, ant_height, lon, lat, antennas.sup_id,
+                                sup_height, transmitters.station_name, operator,
+                                count(distinct system) tech_count, group_concat(distinct system) tech_list,
+                                count(distinct transmitters.id) tx_count, group_concat(distinct transmitters.id) tx_list,
+                                count(distinct transmitters_bands.band_id) band_count,group_concat(distinct transmitters_bands.band_id) band_list,
                                 0 as bitmask1, 0 as bitmask2
 
-                                from anfr_antenne
-                                inner join anfr_support on anfr_antenne.sup_id=anfr_support.sup_id
-                                inner join anfr_site on anfr_site.SITE_ID=anfr_support.site_id
-                                inner join anfr_emetteur on anfr_emetteur.aer_id=anfr_antenne.aer_id
-                                inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
-                                inner join anfr_banemr on anfr_banemr.emr_id=anfr_emetteur.emr_id
-                                inner join anfr_station on anfr_station.sta_nm_anfr=anfr_emetteur.sta_nm_anfr
-                                inner join anfr_id_exploitant on anfr_id_exploitant.adm_id=anfr_station.adm_id
-                                group by anfr_antenne.aer_id;
+                                from antennas
+                                inner join supports on antennas.sup_id=supports.id
+                                inner join sites on sites.id=supports.site_id
+                                inner join transmitters on transmitters.antenna_id=antennas.id
+                                inner join id_systems on transmitters.system_id=id_systems.id
+                                inner join transmitters_bands on transmitters_bands.transmitter_id=transmitters.id
+                                inner join stations on stations.station_name=transmitters.station_name
+                                inner join id_operators on id_operators.id=stations.operator_id
+                                group by antennas.id;
 
                              update gen_sectors set bitmask1=mask_low(tech_list);
                              update gen_sectors set bitmask2=mask_high(tech_list);
@@ -305,208 +319,3 @@ if __name__ == "__main__":
         #create_imtsectors_table(args.dbfile)
         #mask_v_support(args.dbfile)
         gen_sites(args.dbfile)
-
-
-#################################################
-# Legacy
-
-IMT_MASK = ['GSM 900', 'GSM 1800', 'UMTS 900', 'UMTS 2100',
-                'LTE 700', 'LTE 800', 'LTE 900', 'LTE 1800', 'LTE 2100', 'LTE 2600',
-                '5G NR 700', '5G NR 1800', '5G NR 2100', '5G NR 3500']
-IMT_OPS = ['ORANGE', 'SFR', 'FREE MOBILE', 'BOUYGUES TELECOM']
-
-def import_cities(dbfilename, dirpath="etalab"):
-    """Import density grid on a per-city basis as made by INSEE on https://www.insee.fr/fr/information/6439600"""
-    print("Importing city density grid from INSEE")
-    xlsfilename=dirpath + sep + "densites.xlsx"
-    df=pd.read_excel(xlsfilename, sheet_name='Grille_Densite', skiprows=4, header=0)
-    #df.columns = ['insee', 'name', 'dclass', 'region', 'population', 'dfrac1', 'dfrac2', 'dfrac3', 'dfrac4', 'dfrac5', 'dfrac6', 'dfrac7']
-    with sqlite3.connect(dbfilename) as conn:
-        cur = conn.cursor()
-        cur.execute("drop table if exists cities")
-        df.to_sql("cities", conn, index=False)
-
-def create_views(dbfilename):
-    with sqlite3.connect(dbfilename) as conn:
-        cur = conn.cursor()
-        #cur.execute("create view v_support select anfr_support.*, group_concat(sta_nm_anfr,',') sta_nm_anfr_list from anfr_support left outer join anfr_stasup on anfr_stasup.sup_id=anfr_support.SUP_ID group by anfr_support.sup_id")
-        cur.executescript("""
-                        drop index if exists ix_anfr_stasup_STA_NM_ANFR; create index ix_anfr_stasup_STA_NM_ANFR on anfr_stasup(STA_NM_ANFR);
-                        drop index if exists ix_anfr_stasup_SUP_ID; create index ix_anfr_stasup_SUP_ID on anfr_stasup(SUP_ID);
-                        drop index if exists ix_anfr_staant_STA_NM_ANFR; create index ix_anfr_staant_STA_NM_ANFR on anfr_staant(STA_NM_ANFR);
-                        drop index if exists ix_anfr_staant_AER_ID; create index ix_anfr_staant_AER_ID on anfr_staant(AER_ID);
-
-                        create view v_support as
-                        select anfr_support.sup_id, anfr_support.site_id, cor_dms, sup_nm_haut, nat_lb_nom, tpo_lb, sta_nm_anfr_count,sta_nm_anfr_list, aer_id_count,aer_id_list,tech_count,tech_list
-                        from anfr_support
-                        inner join (
-                            select anfr_support.sup_id as sid,count(sta_nm_anfr) sta_nm_anfr_count, group_concat(sta_nm_anfr) sta_nm_anfr_list
-                            from anfr_support inner join anfr_stasup on anfr_stasup.sup_id=anfr_support.sup_id
-                            group by anfr_support.sup_id
-                        ) on sid = anfr_support.sup_id
-                        inner join (
-                            select anfr_support.sup_id as sid2, count(distinct anfr_antenne.aer_id) aer_id_count, group_concat(distinct anfr_antenne.aer_id) aer_id_list,count(distinct emr_lb_systeme) tech_count, group_concat(distinct emr_lb_systeme) tech_list
-                            from anfr_support inner join anfr_antenne on anfr_antenne.sup_id=anfr_support.sup_id
-                            inner join anfr_emetteur on anfr_emetteur.aer_id=anfr_antenne.aer_id inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
-                            group by anfr_support.sup_id
-                        ) on sid2 = anfr_support.sup_id
-                        inner join anfr_site on anfr_site.site_id=anfr_support.site_id
-                        inner join anfr_id_nature on anfr_id_nature.nat_id=anfr_support.nat_id
-                        inner join anfr_id_proprietaire on anfr_id_proprietaire.tpo_id=anfr_support.tpo_id
-                        group by anfr_support.sup_id;
-
-                        create view v_antenne as
-                        select anfr_antenne.aer_id, sup_id, aer_nb_dimension, aer_fg_rayon, aer_nb_azimut, aer_nb_alt_bas,sta_nm_anfr_count, sta_nm_anfr_list, tae_lb, emr_id_count,emr_id_list,tech_count,tech_list
-                        from anfr_antenne
-                        inner join (
-                            select anfr_antenne.aer_id as aid,count(sta_nm_anfr) sta_nm_anfr_count, group_concat(sta_nm_anfr) sta_nm_anfr_list
-                            from anfr_antenne inner join anfr_staant on anfr_staant.aer_id=anfr_antenne.aer_id
-                            group by anfr_antenne.aer_id
-                        ) on aid = anfr_antenne.aer_id
-                        inner join (
-                            select anfr_antenne.aer_id as aid2,count(emr_id) emr_id_count, group_concat(emr_id) emr_id_list,
-                            count(distinct emr_lb_systeme) tech_count, group_concat(distinct emr_lb_systeme) tech_list
-                            from anfr_antenne inner join anfr_emetteur on anfr_emetteur.aer_id=anfr_antenne.aer_id
-                            inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
-                            group by anfr_antenne.aer_id
-                        ) on aid2 = anfr_antenne.aer_id
-                        inner join anfr_id_type_antenne on anfr_id_type_antenne.tae_id=anfr_antenne.tae_id
-                        group by anfr_antenne.aer_id;
-
-
-                        create table t_rop as
-                        select anfr_site.site_id, anfr_antenne.sup_id, anfr_antenne.aer_id, aer_nb_azimut azh, aer_nb_alt_bas h, cor_dms, cor_nb_lat as lat, cor_nb_lon as lon, com_cd_insee insee , sta_nm_anfr_list stations, emr_id_list emetteurs,tech_list techs, op_list ops, sta_nm_anfr_count, emr_id_count, tech_count, op_count
-                        from anfr_antenne
-                        inner join (
-                            select anfr_antenne.aer_id as aid,count(anfr_staant.sta_nm_anfr) sta_nm_anfr_count, group_concat(anfr_staant.sta_nm_anfr) sta_nm_anfr_list ,group_concat(adm_lb_nom) op_list, count(adm_lb_nom) op_count
-                            from anfr_antenne inner join anfr_staant on anfr_staant.aer_id=anfr_antenne.aer_id
-                            inner join anfr_station on anfr_station.sta_nm_anfr=anfr_staant.STA_NM_ANFR
-                            inner join anfr_id_exploitant on anfr_station.adm_id=anfr_id_exploitant.adm_id
-                            group by anfr_antenne.aer_id
-                        ) on aid = anfr_antenne.aer_id
-                        inner join (
-                            select anfr_antenne.aer_id as aid2,count(emr_id) emr_id_count, group_concat(emr_id) emr_id_list,
-                            count(distinct emr_lb_systeme) tech_count, group_concat(distinct emr_lb_systeme) tech_list
-                            from anfr_antenne inner join anfr_emetteur on anfr_emetteur.aer_id=anfr_antenne.aer_id
-                            inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
-                            group by anfr_antenne.aer_id
-                        ) on aid2 = anfr_antenne.aer_id
-                        inner join anfr_support on anfr_support.sup_id=anfr_antenne.sup_id
-                        inner join anfr_site on anfr_site.SITE_ID=anfr_support.site_id
-                        group by anfr_antenne.aer_id
-                        having tech_list like 'GSM %' or tech_list like 'UMTS %' or tech_list like 'LTE %' or tech_list like '5G %'
-                        """)
-
-def create_imtsectors_table(dbfilename, systype="IMT", bbox="lat<52 and lat>42 and lon<9 and lon>-5", dotable=False):
-    tabletype = "table" if dotable else "view"
-    with sqlite3.connect(dbfilename) as conn:
-        cur = conn.cursor()
-        condlist = []
-        if bbox:
-            condlist.append(bbox)
-        if systype:
-            if systype=="IMT":
-                syslist = [k[0] for k in cur.execute("select emr_lb_systeme from anfr_id_systeme where emr_lb_systeme like 'GSM %' or emr_lb_systeme like 'UMTS %' or emr_lb_systeme like 'LTE %' or emr_lb_systeme like '5G %' ").fetchall()]
-                sysnames = "('" + "', '".join(syslist) + "', 'BLR 3 GHZ', 'BLR 3 GHz', 'BLR LTE 3500')"
-            elif systype=="BLR": sysnames = "('BLR 3 GHZ', 'BLR 3 GHz', 'BLR LTE 3500')"
-            elif systype=="FH": sysnames = "('FH', 'FH ABI')"
-            elif systype.startswith('('): sysnames = systype
-            condlist.append("emr_lb_systeme in " + sysnames)
-        sqlwhere = "where " + " and ".join(condlist)
-
-        print(f'Generating {tabletype} "sectors"')
-        tablename="gen_sectors"
-        if dotable:
-            cur.executescript('''
-            drop index if exists anfr_lat_idx;
-            drop index if exists anfr_lon_idx;
-            drop index if exists anfr_comsis_idx;
-            drop index if exists anfr_insee_idx;
-            drop index if exists anfr_freq_idx;
-            drop index if exists anfr_op_idx;
-            ''')
-        cur.executescript(f'''
-            drop {tabletype} if exists {tablename};
-            create {tabletype} {tablename} as
-            select anfr_emetteur.emr_id sectorid, dem_nm_comsis comsis,
-            anfr_support.sup_id siteid, anfr_station.sta_nm_anfr sta_anfr,
-            aer_nb_alt_bas h, sup_nm_haut h2, (ban_nb_f_deb+ban_nb_f_fin)/2e6 freq_mhz,
-            (ban_nb_f_fin-ban_nb_f_deb)/1e3 bw_mhz,
-            aer_nb_azimut azh, com_cd_insee insee, cor_dms as dms,
-            cor_nb_lat as lat, cor_nb_lon as lon, emr_lb_systeme tech,
-            adm_lb_nom op, tpo_lb op2, nat_lb_nom as sup_type
-            from anfr_bande
-            inner join anfr_id_band on anfr_bande.ban_id=anfr_id_band.BAN_ID
-            inner join anfr_emetteur on anfr_bande.emr_id=anfr_emetteur.emr_id
-            inner join anfr_antenne on anfr_emetteur.aer_id=anfr_antenne.aer_id
-            inner join anfr_support on anfr_antenne.sup_id=anfr_support.sup_id
-            inner join anfr_station on anfr_antenne.sta_nm_anfr=anfr_station.sta_nm_anfr
-            inner join anfr_id_exploitant on anfr_station.adm_id=anfr_id_exploitant.adm_id
-            inner join anfr_id_proprietaire on anfr_support.tpo_id=anfr_id_proprietaire.tpo_id
-            inner join anfr_id_nature on anfr_support.nat_id=anfr_id_nature.nat_id
-            inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
-            {sqlwhere}
-            group by sectorid;
-        ''') # null as id, null as pow, null as tilt, null as aer, 0 alt, ban_nb_f_deb fmin,ban_nb_f_fin fmax, # inner join cities on com_cd_insee=cities.insee
-        if dotable:
-            cur.executescript(f'''
-            create index anfr_lat_idx on {tablename}(lat);
-            create index anfr_lon_idx on {tablename}(lon);
-            create index anfr_comsis_idx on {tablename}(comsis);
-            create index anfr_insee_idx on {tablename}(insee);
-            create index anfr_freq_idx on {tablename}(freq_mhz);
-            create index anfr_op_idx on {tablename}(op);
-            ''')
-
-
-def mask_v_support_legacy(dbfilename):
-    with sqlite3.connect(dbfilename) as conn:
-        cur = conn.cursor()
-        global SYSLIST
-        SYSLIST = [k[0] for k in cur.execute('select EMR_LB_SYSTEME from anfr_id_systeme').fetchall()]
-        conn.create_function("mask_low", 1, mask_from_list_low64)
-        conn.create_function("mask_high", 1, mask_from_list_high64)
-        # FIXME: better create gen_sites ?
-        cur.executescript("""drop table if exists gen_support ;
-                             create table gen_support as
-                                    select anfr_support.sup_id, anfr_support.site_id, cor_nb_lat as lat, cor_nb_lon as lon, sup_nm_haut, nat_lb_nom, tpo_lb, sta_nm_anfr_count,sta_nm_anfr_list, aer_id_count,aer_id_list,com_cd_insee insee,mask_low(tech_list) tech_bitmask1, mask_high(tech_list) tech_bitmask2, tech_count,tech_list,cor_dms
-                                    from anfr_support
-                                    inner join (
-                                        select anfr_support.sup_id as sid,count(sta_nm_anfr) sta_nm_anfr_count, group_concat(sta_nm_anfr) sta_nm_anfr_list
-                                        from anfr_support inner join anfr_stasup on anfr_stasup.sup_id=anfr_support.sup_id
-                                        group by anfr_support.sup_id
-                                    ) on sid = anfr_support.sup_id
-                                    inner join (
-                                        select anfr_support.sup_id as sid2, count(distinct anfr_antenne.aer_id) aer_id_count, group_concat(distinct anfr_antenne.aer_id) aer_id_list,count(distinct emr_lb_systeme) tech_count, group_concat(distinct emr_lb_systeme) tech_list
-                                        from anfr_support inner join anfr_antenne on anfr_antenne.sup_id=anfr_support.sup_id
-                                        inner join anfr_emetteur on anfr_emetteur.aer_id=anfr_antenne.aer_id inner join anfr_id_systeme on anfr_emetteur.sys_id=anfr_id_systeme.sys_id
-                                        group by anfr_support.sup_id
-                                    ) on sid2 = anfr_support.sup_id
-                                    inner join anfr_site on anfr_site.site_id=anfr_support.site_id
-                                    inner join anfr_id_nature on anfr_id_nature.nat_id=anfr_support.nat_id
-                                    inner join anfr_id_proprietaire on anfr_id_proprietaire.tpo_id=anfr_support.tpo_id
-                                    group by anfr_support.sup_id;""")
-
-#df = coalesce_freqs(df.groupby("EMR_ID"))
-# def coalesce_freqs_slow(dfg):
-#     res = []
-#     kk=0
-#     for EMR_ID,freqs in dfg:
-#         sys.stderr.write(f"\rCoalescing freq entries: {100 * kk // len(dfg)} %")
-#         kk+=1
-#         groups = []
-#         for row in freqs.iterrows():
-#             fmin = row[1].BAN_NB_F_DEB
-#             fmax = row[1].BAN_NB_F_FIN
-#             if pd.isna(fmin) or pd.isna(fmax):
-#                 continue
-#             found=False
-#             for g in groups:
-#                 gmin = g[0] ; gmax = g[1]
-#                 if fmin>=gmin and fmin<=gmax and fmax>=gmin and fmax<=gmax: found=True; break # Already covered
-#                 elif fmin>=gmin and fmin<=gmax: g[1] = fmax ; found=True ; break # Extend upwards
-#                 elif fmax>=gmin and fmax<=gmax: g[0] = fmin ; found=True ; break # Extend downwards
-#             if found==False: groups.append([fmin,fmax,EMR_ID])
-#         res.extend(groups)
-#     return pd.DataFrame(data=res, columns=["fmin","fmax","EMR_ID"])
-

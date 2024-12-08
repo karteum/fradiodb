@@ -1,39 +1,39 @@
 anfr: {
-  id_systeme: {
+  id_systems: {
     shape: sql_table
-    sys_id: int {constraint: primary_key}
-    sys_lb: text
+    id: int {constraint: primary_key}
+    system: text
   }
-  id_bande: {
+  id_bands: {
     shape: sql_table
-    ban_id: int {constraint: primary_key}
+    id: int {constraint: primary_key}
     fmin: int
     fmax: int
   }
-  id_type_antenne: {
+  id_antenna_types: {
     shape: sql_table
-    tae_id: int {constraint: primary_key}
-    tae_lb: text
+    id: int {constraint: primary_key}
+    antenna_type: text
   }
-  id_nature: {
+  id_support_types: {
     shape: sql_table
-    nat_id: int {constraint: primary_key}
-    nat_lb: text
+    id: int {constraint: primary_key}
+    support_type: text
   }
-  id_proprietaire: {
+  id_support_owners: {
     shape: sql_table
-    tpo_id: int {constraint: primary_key}
-    tpo_lb: text
+    id: int {constraint: primary_key}
+    support_owner: text
   }
-  id_exploitant: {
+  id_operators: {
     shape: sql_table
-    adm_id: int {constraint: primary_key}
-    adm_lb: text
+    id: int {constraint: primary_key}
+    operator: text
   }
 
-  site: {
+  sites: {
     shape: sql_table
-    site_id: int {constraint: primary_key}
+    id: int {constraint: primary_key}
     dms: text
     lat: float
     lon: float
@@ -42,66 +42,58 @@ anfr: {
     inseecode: int
   }
 
-  emetteur: {
+  transmitters: {
     shape: sql_table
-    emr_id: int {constraint: primary_key}
-    sta_id: text {constraint: foreign_key}
-    aer_id: int {constraint: foreign_key}
-    sys_id: int {constraint: foreign_key}
-    emr_dt_service: timestamp
+    id: int {constraint: primary_key}
+    station_id: text {constraint: foreign_key}
+    antenna_id: int {constraint: foreign_key}
+    system_id: int {constraint: foreign_key}
+    date_switchedon: timestamp
   }
-  emetteur.sys_id -> id_systeme.sys_id
-  emetteur.aer_id -> antenne.aer_id
-  emetteur.sta_id -> station.sta_id
+  transmitters.system_id -> id_systems.id
+  transmitters.antenna_id -> antennas.id
+  transmitters.station_id -> stations.id
 
-  banemr: {
+  transmitters_bands: {
     shape: sql_table
-    emr_id: int {constraint: foreign_key}
-    ban_id: int {constraint: foreign_key}
+    transmitter_id: int {constraint: foreign_key}
+    band_id: int {constraint: foreign_key}
   }
-  banemr.emr_id -> emetteur.emr_id
-  banemr.ban_id -> id_bande.ban_id
+  transmitters_bands.transmitter_id -> transmitters.id
+  transmitters_bands.band_id -> id_bands.id
 
-  antenne: {
+  antennas: {
     shape: sql_table
-    aer_id: int {constraint: primary_key}
-    tae_id: int {constraint: foreign_key}
+    id: int {constraint: primary_key}
+    anttype_id: int {constraint: foreign_key}
     sup_id: int {constraint: foreign_key}
     dimension: float
-    azimut: int
-    alt_bas: float
+    azimuth: int
+    ant_height: float
   }
-  antenne.tae_id -> id_type_antenne.tae_id
-  antenne.sup -> support.sup_id
+  antennas.anttype_id -> id_antenna_types.id
+  antennas.sup_id -> supports.id
 
-  support: {
+  supports: {
     shape: sql_table
-    sup_id: int {constraint: primary_key}
-    nat_id: int {constraint: foreign_key}
-    tpo_id: int {constraint: foreign_key}
+    id: int {constraint: primary_key}
+    suptype_id: int {constraint: foreign_key}
+    owner_id: int {constraint: foreign_key}
     site_id: int {constraint: foreign_key}
-    haut: int
+    sup_height: int
   }
-  support.nat_id -> id_nature.nat_id
-  support.tpo_id -> id_proprietaire.tpo_id
-  support.site_id -> site.site_id
+  supports.suptype_id -> id_support_types.id
+  supports.owner_id -> id_support_owners.id
+  supports.site_id -> sites.id
 
-  station: {
+  stations: {
     shape: sql_table
-    sta_id: text {constraint: primary_key}
-    adm_id: int {constraint: foreign_key}
-    comsis_id: int
-    dte_implantation: timestamp
-    dte_modif: timestamp
-    dte_en_service: timestamp
+    id: int {constraint: primary_key}
+    operator_id: int {constraint: foreign_key}
+    station_name: text
+    date_created: timestamp
+    date_modified: timestamp
+    date_operational: timestamp
   }
-  station.adm_id -> id_exploitant.adm_id
-
-  staant: {
-    shape: sql_table
-    sta_id: text {constraint: foreign_key}
-    aer_id: int {constraint: foreign_key}
-  }
-  staant.sta_id -> station.sta_id
-  staant.aer_id -> antenne.aer_id
+  stations.operator_id -> id_operators.id
 }
