@@ -17,6 +17,8 @@ import urllib.request as req
 import sys
 
 # Schema diagram: d2 ./schema.d2 -s -t 100
+# 'NC': ('New Caledonia', (164.029605748, -22.3999760881, 167.120011428, -20.1056458473)),
+# lon=165E, lat=21S => X=-1358673, Y=-534964
 
 #def sanitycheck(dbfilename):
     # select * from anfr_support where sup_id not in (select sup_id from anfr_antenne)
@@ -64,6 +66,28 @@ def coalesce_freqs(df):
             res.append([k , int(fc.real), int(fc.imag)])
     return pd.DataFrame(data=res, columns=["transmitter_id","fmin_kHz","fmax_kHz"])
 
+def fix_insee_postcode(df):
+    import geopandas as gpd
+    CRS_WGS84=4326
+    gdf_data = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs=CRS_WGS84)
+    shapefile_metro = gpd.read_file("shp/communes-20220101.shp")
+    gdf_metro = gpd.sjoin(gdf_data, shapefile_metro)
+    #gdf_communes_com = gpd.read_file("shp/communes-com-20180101.shp")
+    shapefile_nc = gpd.read_file("shp/communes-nc.fgb")
+    gdf_nc = gpd.sjoin(gdf_data, shapefile_nc)
+    #df['city'] = pd.concat([gdf_metro.nom, gdf_nc.nom])
+    #df['insee_correct'] = pd.concat([gdf_metro.insee, gdf_nc.inseecode])
+    df['insee_correct'] = gdf_metro['inseecode']
+
+    #shapefile_metro2 = gpd.read_file("shp/COMMUNE_FRMETDROM.shp")
+    #gdf_metro2 = gpd.sjoin(gdf_data, shapefile_metro2)
+    #df['insee_correct2'] = gdf_metro2['INSEE_COM']
+    #return gdf_data, shapefile_metro, gdf_metro, gdf_nc
+    return df
+
+def dfdiff(df1, df2):
+    return pd.concat([df1,df2]).drop_duplicates(keep=False)
+
 def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
     """Import data from zipped files from data.gouv.fr into a local SQLite DB, with some refinements (e.g. convert DMS coordinates to linear)"""
     if exists(dbfilename):
@@ -84,21 +108,20 @@ def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
                                     'sup_station': 'stations',
                                     'sup_emetteur': 'transmitters' }
                     tablename = table_rename[splitext(basename(csvfile.filename))[0].lower()]
-                    #if tablename!='supports': continue
+                    if tablename!='id_bands': continue
                     if tablename == 'supports':
-                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", encoding='iso8859-1', index_col="SUP_ID", dtype={"STA_NM_ANFR": str, "NAT_ID": 'Int64', "TPO_ID": 'Int64', 'COM_CD_INSEE': str, 'ADR_NM_CP': 'Int64'}) # "COM_CD_INSEE": 'Int64'} #index_col=pk[tablename],
-                        df.rename(columns={"ADR_NM_CP": "postcode", "COM_CD_INSEE": "inseecode", "NAT_ID": "suptype_id", "SUP_NM_HAUT": "sup_height", "TPO_ID": "owner_id", 'STA_NM_ANFR': "station_name"}, inplace=True)
+                        df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", encoding='iso8859-1', dtype={"STA_NM_ANFR": str, "NAT_ID": 'Int64', "TPO_ID": 'Int64', 'COM_CD_INSEE': str, 'ADR_NM_CP': 'Int64'}) # "COM_CD_INSEE": 'Int64'} #index_col=pk[tablename],index_col="SUP_ID",
+                        df.rename(columns={"ADR_NM_CP": "postcode", "COM_CD_INSEE": "inseecode", "NAT_ID": "suptype_id", "SUP_NM_HAUT": "sup_height", "TPO_ID": "owner_id", 'STA_NM_ANFR': "station_name", "SUP_ID": "sup_id"}, inplace=True)
                         df['lat'] = round(((df.COR_CD_NS_LAT=='N')*2-1) * (df.COR_NB_DG_LAT + df.COR_NB_MN_LAT/60 + df.COR_NB_SC_LAT/3600), 4)
                         df['lon'] = round(((df.COR_CD_EW_LON=='E')*2-1) * (df.COR_NB_DG_LON + df.COR_NB_MN_LON/60 + df.COR_NB_SC_LON/3600), 4)
-                        df['dms'] = (df.COR_NB_DG_LAT.map(str) + '°' + df.COR_NB_MN_LAT.map(str) + "'" + df.COR_NB_SC_LAT.map(str) + '"' + df.COR_CD_NS_LAT + ' ' +
-                                     df.COR_NB_DG_LON.map(str) + "°" + df.COR_NB_MN_LON.map(str) + "'" + df.COR_NB_SC_LON.map(str) + '"' + df.COR_CD_EW_LON)
+                        df['dms'] = (df.COR_NB_DG_LAT.astype(str) + '°' + df.COR_NB_MN_LAT.astype(str) + "'" + df.COR_NB_SC_LAT.astype(str) + '"' + df.COR_CD_NS_LAT + ' ' +
+                                     df.COR_NB_DG_LON.astype(str) + "°" + df.COR_NB_MN_LON.astype(str) + "'" + df.COR_NB_SC_LON.astype(str) + '"' + df.COR_CD_EW_LON)
                         df['address'] = df.ADR_LB_LIEU.str.cat(df[["ADR_LB_ADD1", "ADR_LB_ADD2", "ADR_LB_ADD3"]], sep=', ', na_rep='¤').str.replace(', ¤', '').str.replace('¤, ', '').str.title()
                         del df['COR_CD_NS_LAT'], df['COR_NB_DG_LAT'], df['COR_NB_MN_LAT'], df['COR_NB_SC_LAT'], df['COR_CD_EW_LON'], df['COR_NB_DG_LON'], df['COR_NB_MN_LON'], df['COR_NB_SC_LON'], df['ADR_LB_ADD1'], df['ADR_LB_ADD2'], df['ADR_LB_ADD3'], df['ADR_LB_LIEU']
 
                         # SUP_ID is not unique in original ANFR data: one support may host several stations, but also (for historical reasons) one station may be declared with several supports
                         # FIXME: not needed ?
                         df_stasup = df[['station_name']].copy()
-                        df_stasup['sup_id'] = df_stasup.index
                         df_stasup.to_sql('legacy_stasup', conn, if_exists='replace', index=False)  # FIXME: stasup useless since info is in anfr_emetteur ?
 
                         # FIXME: original data have an issue because there are 1338 sites that have near-duplicates (i.e. same coordinates but different "address" informations that would need to be merged)
@@ -115,7 +138,7 @@ def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
 
                         #df1 = df.groupby('id', as_index=False)[['suptype_id', 'sup_height', 'owner_id', 'site_id']].first()
                         #df['STA_NM_ANFR_list'] = dfgroup['STA_NM_ANFR'].agg(','.join)['STA_NM_ANFR']
-                        #df.set_index('SUP_ID', inplace=True)
+                        df.set_index('sup_id', inplace=True)
                         df = df[['suptype_id', 'sup_height', 'owner_id', 'site_id']].drop_duplicates()
                     elif tablename == 'stations':
                         df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}, parse_dates=['DTE_IMPLANTATION', 'DTE_MODIF'], index_col="DEM_NM_COMSIS", dayfirst=True) #date_format='DD/MM/YYYY', infer_datetime_format=True
@@ -134,7 +157,7 @@ def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
                         del df['system']
                     elif tablename=='id_bands':
                         df_banemr = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", usecols=["EMR_ID","BAN_NB_F_DEB","BAN_NB_F_FIN","BAN_FG_UNITE"]) #, index_col=pk[tablename], dtype={"STA_NM_ANFR": str, 'EMR_ID':'Int64'}
-                        df.rename(columns={"STA_NM_ANFR": "station_name", "BAN_ID": "transmitter_band_id", "EMR_ID": "transmitter_id"}, inplace=True)
+                        df_banemr.rename(columns={"STA_NM_ANFR": "station_name", "BAN_ID": "transmitter_band_id", "EMR_ID": "transmitter_id"}, inplace=True)
                         #del df['STA_NM_ANFR']   # anfr_bande already includes a field EMR_ID, and anfr_emetteur already has the correspondance EMR_ID<->STA_NM_ANFR (where an EMR_ID is associated to one and only one )
                         df_banemr['unit'] = 0
                         df_banemr.loc[df_banemr.BAN_FG_UNITE=='K', 'unit'] = 1   #1e3
