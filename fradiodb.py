@@ -38,10 +38,11 @@ def download_data(dirpath='etalab'):
         req.urlretrieve(v, filename=dirpath+sep+k)
     print('Download OK')
 
-def coalesce_freqs(df):
+def coalesce_freqs(df, idfieldname="transmitter_id"):
     # Coalesce overlapping entries of frequency ranges
     emrbands = {}
     kk=0
+    df.sort_values(by='fmin_kHz', inplace=True) # FIXME: needed ?
     for row in df.iterrows():
         sys.stderr.write(f"\rCoalescing freq entries: {100 * kk // len(df)} %")
         kk+=1
@@ -64,7 +65,7 @@ def coalesce_freqs(df):
     for k in emrbands.keys():
         for fc in emrbands[k]:
             res.append([k , int(fc.real), int(fc.imag)])
-    return pd.DataFrame(data=res, columns=["transmitter_id","fmin_kHz","fmax_kHz"])
+    return pd.DataFrame(data=res, columns=[idfieldname,"fmin_kHz","fmax_kHz"])
 
 def fix_insee_postcode(df):
     import geopandas as gpd
@@ -88,27 +89,29 @@ def fix_insee_postcode(df):
 def dfdiff(df1, df2):
     return pd.concat([df1,df2]).drop_duplicates(keep=False)
 
-def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
+def import_anfr_zip(dbfilename, dirpath='etalab', coalesce=False):
     """Import data from zipped files from data.gouv.fr into a local SQLite DB, with some refinements (e.g. convert DMS coordinates to linear)"""
     if exists(dbfilename):
         remove (dbfilename)
     with sqlite3.connect(dbfilename) as conn:
         cur = conn.cursor()
+        df_bandgroup_emr = None
+        df_transmitters = None
         for myzipfile in glob(dirpath + sep + "*etalab*.zip"): # [dirpath + sep + x for x in listdir(dirpath) if x.endswith('.zip')]:
             with zipfile.ZipFile(myzipfile) as zFile:
                 for csvfile in zFile.infolist():
-                    print("importing " + csvfile.filename)
                     table_rename = {'sup_exploitant': 'id_operators',
                                     'sup_nature': 'id_support_types',
                                     'sup_proprietaire': 'id_support_owners',
                                     'sup_type_antenne': 'id_antenna_types',
-                                    'sup_bande': 'id_bands',
+                                    'sup_bande': 'bands',
                                     'sup_antenne': 'antennas',
                                     'sup_support': 'supports',
                                     'sup_station': 'stations',
                                     'sup_emetteur': 'transmitters' }
                     tablename = table_rename[splitext(basename(csvfile.filename))[0].lower()]
-                    if tablename!='id_bands': continue
+                    #if not tablename in ('bands', 'transmitters'): continue
+                    print("importing " + csvfile.filename)
                     if tablename == 'supports':
                         df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", encoding='iso8859-1', dtype={"STA_NM_ANFR": str, "NAT_ID": 'Int64', "TPO_ID": 'Int64', 'COM_CD_INSEE': str, 'ADR_NM_CP': 'Int64'}) # "COM_CD_INSEE": 'Int64'} #index_col=pk[tablename],index_col="SUP_ID",
                         df.rename(columns={"ADR_NM_CP": "postcode", "COM_CD_INSEE": "inseecode", "NAT_ID": "suptype_id", "SUP_NM_HAUT": "sup_height", "TPO_ID": "owner_id", 'STA_NM_ANFR': "station_name", "SUP_ID": "sup_id"}, inplace=True)
@@ -121,8 +124,8 @@ def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
 
                         # SUP_ID is not unique in original ANFR data: one support may host several stations, but also (for historical reasons) one station may be declared with several supports
                         # FIXME: not needed ?
-                        df_stasup = df[['station_name']].copy()
-                        df_stasup.to_sql('legacy_stasup', conn, if_exists='replace', index=False)  # FIXME: stasup useless since info is in anfr_emetteur ?
+                        #df_stasup = df[['station_name']].copy()
+                        #df_stasup.to_sql('legacy_stasup', conn, if_exists='replace', index=False)  # FIXME: stasup useless since info is in anfr_emetteur ?
 
                         # FIXME: original data have an issue because there are 1338 sites that have near-duplicates (i.e. same coordinates but different "address" informations that would need to be merged)
                         # select group_concat(id),dms,group_concat(address, '__¤__'),group_concat(postcode, '__¤__'),group_concat(inseecode, '__¤__'), count(dms) c from supports_tmp group by dms having c>1
@@ -134,7 +137,7 @@ def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
                         dfsites.to_sql('sites', conn, if_exists='replace', index_label='id', dtype={'id': 'INTEGER primary key'}) #index=True,
                         dfsites['site_id'] = dfsites.index # FIXME: +1 ?
                         dfsites.set_index('dms', inplace=True)
-                        df['site_id'] = dfsites.loc[df.dms].site_id.to_numpy()
+                        df['site_id'] = dfsites.loc[df.dms].site_id.values
 
                         #df1 = df.groupby('id', as_index=False)[['suptype_id', 'sup_height', 'owner_id', 'site_id']].first()
                         #df['STA_NM_ANFR_list'] = dfgroup['STA_NM_ANFR'].agg(','.join)['STA_NM_ANFR']
@@ -153,9 +156,13 @@ def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
                         dfsys.to_sql('id_systems', conn, if_exists='replace', index_label='id', dtype={'id': 'INTEGER primary key'}) #index=True,
                         dfsys['system_id'] = dfsys.index
                         dfsys.set_index('system', inplace=True)
-                        df['system_id']=dfsys.loc[df.system].system_id.to_numpy() # FIXME: replace "NULL" entry in systemes
+                        df['system_id']=dfsys.loc[df.system].system_id.values # FIXME: replace "NULL" entry in systemes
                         del df['system']
-                    elif tablename=='id_bands':
+                        if df_bandgroup_emr is not None:
+                            df['bandgroup_id'] = df_bandgroup_emr.bandgroup_id.astype('Int64')
+                        else: df_transmitters = df
+                    elif tablename=='bands':
+                        print("(Preprocessing may take a few minutes...)")
                         df_banemr = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", usecols=["EMR_ID","BAN_NB_F_DEB","BAN_NB_F_FIN","BAN_FG_UNITE"]) #, index_col=pk[tablename], dtype={"STA_NM_ANFR": str, 'EMR_ID':'Int64'}
                         df_banemr.rename(columns={"STA_NM_ANFR": "station_name", "BAN_ID": "transmitter_band_id", "EMR_ID": "transmitter_id"}, inplace=True)
                         #del df['STA_NM_ANFR']   # anfr_bande already includes a field EMR_ID, and anfr_emetteur already has the correspondance EMR_ID<->STA_NM_ANFR (where an EMR_ID is associated to one and only one )
@@ -163,26 +170,51 @@ def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
                         df_banemr.loc[df_banemr.BAN_FG_UNITE=='K', 'unit'] = 1   #1e3
                         df_banemr.loc[df_banemr.BAN_FG_UNITE=='M', 'unit'] = 1e3 #1e6
                         df_banemr.loc[df_banemr.BAN_FG_UNITE=='G', 'unit'] = 1e6 #1e9
-                        df_banemr['fmin_kHz'] = round(df_banemr.BAN_NB_F_DEB * df_banemr.unit).astype(pd.Int64Dtype())
-                        df_banemr['fmax_kHz'] = round(df_banemr.BAN_NB_F_FIN * df_banemr.unit).astype(pd.Int64Dtype())
+                        df_banemr['fmin_kHz'] = round(df_banemr.BAN_NB_F_DEB * df_banemr.unit).astype('Int64') #pd.Int64Dtype()
+                        df_banemr['fmax_kHz'] = round(df_banemr.BAN_NB_F_FIN * df_banemr.unit).astype('Int64')
                         del df_banemr['BAN_FG_UNITE'], df_banemr['unit'], df_banemr['BAN_NB_F_DEB'], df_banemr['BAN_NB_F_FIN']
-                        if coalesce:
-                            df_banemr = coalesce_freqs(df_banemr) # A little bit long to compute, but this removes ~24000 useless/duplicate entries
-                        df = df_banemr[['fmin_kHz', 'fmax_kHz']].drop_duplicates().sort_values(by='fmin_kHz').reset_index(drop=True)
-                        df['BANSTR'] = df['fmin_kHz'].astype(str) + '_' + df['fmax_kHz'].astype(str)
-                        df['band_id'] = df.index
-                        df.set_index('BANSTR', inplace=True)
-                        df_banemr['BANSTR'] = df_banemr['fmin_kHz'].astype(str) + '_' + df_banemr['fmax_kHz'].astype(str)
-                        df_banemr['band_id'] = df.loc[df_banemr.BANSTR].band_id.to_numpy()
-                        del df_banemr['BANSTR'], df_banemr['fmin_kHz'], df_banemr['fmax_kHz']
-                        df_banemr.to_sql('transmitters_bands', conn, if_exists='replace', index=False)
-                        df.set_index('band_id', inplace=True)
+                        df_banemr.dropna(inplace=True)
+
+                        #if coalesce:
+                        #    df_banemr = coalesce_freqs(df_banemr) # A little bit long to compute, but this removes ~24000 useless/duplicate entries
+                        df_bands = df_banemr[['fmin_kHz', 'fmax_kHz']].drop_duplicates().sort_values(by='fmin_kHz').reset_index(drop=True)
+                        df_bands['BANSTR'] = df_bands['fmin_kHz'].astype(str) + '-' + df_bands['fmax_kHz'].astype(str)
+                        df_bands['band_id'] = df_bands.index
+                        df_bands.set_index('BANSTR', inplace=True)
+                        df_banemr['BANSTR'] = df_banemr['fmin_kHz'].astype(str) + '-' + df_banemr['fmax_kHz'].astype(str)
+                        df_banemr['band_id'] = df_bands.loc[df_banemr.BANSTR].band_id.values
+                        df_bands.set_index('band_id', inplace=True)
+                        df_bands.index.name = "id"
+
+                        df_banemr['band_id_str'] = df_banemr['band_id'].astype(str)
+                        df_bandgroup_emr = pd.DataFrame(df_banemr.sort_values('band_id').groupby('transmitter_id')['band_id_str'].unique().agg(','.join))
+                        df_bandgroup = df_bandgroup_emr.drop_duplicates().reset_index(drop=True)
+                        df_bandgroup['bandgroup_id'] = df_bandgroup.index ; df_bandgroup.set_index('band_id_str', inplace=True)
+                        df_bandgroup_emr['bandgroup_id'] = df_bandgroup.loc[df_bandgroup_emr.band_id_str].bandgroup_id.values
+                        df_bandgroup['band_id_str'] = df_bandgroup.index ; df_bandgroup.set_index('bandgroup_id', inplace=True)
+                        df_bandgroup = pd.DataFrame(df_bandgroup.band_id_str.str.split(',').explode().astype('Int64'))
+
+                        df_bandgroup['fmin_kHz'] = df_bands.loc[df_bandgroup.band_id_str].fmin_kHz.values
+                        df_bandgroup['fmax_kHz'] = df_bands.loc[df_bandgroup.band_id_str].fmax_kHz.values
+                        #df_bandgroup.rename(columns={'band_id_str': 'band_id'}, inplace=True)
+                        #df_bands.to_sql('id_bands', conn, if_exists='replace', index=True, dtype={"id": 'INTEGER primary key'})
+                        del df_bandgroup['band_id_str'], df_bandgroup_emr['band_id_str']
+                        df_bandgroup.reset_index(inplace=True)
+                        df_bandgroup = coalesce_freqs(df_bandgroup, "bandgroup_id")
+                        df_bandgroup.to_sql('bandgroups', conn, if_exists='replace', index=False)
+                        if df_transmitters is not None:
+                            df_transmitters['bandgroup_id'] = df_bandgroup_emr.bandgroup_id.astype('Int64')
+                            df = df_transmitters ; tablename = "transmitters"
+                        else: df = None
+                            #df_bandgroup_emr.to_sql('transmitters_bandgroups', conn, if_exists='replace', index=True)
+                        #df_banemr.to_sql('dbg_transmitters_bands', conn, if_exists='replace', index=False)
                     elif tablename=='antennas':
                         df = pd.read_csv(zFile.open(csvfile), sep=';', decimal = ",", dtype={"STA_NM_ANFR": str}) #, index_col=pk[tablename]
                         df.rename(columns={"AER_ID": "antenna_id", "STA_NM_ANFR": "station_name", "TAE_ID": "anttype_id", "AER_NB_DIMENSION": "dimension", "AER_NB_AZIMUT": "azimuth", "AER_FG_RAYON": "dim_type", "AER_NB_ALT_BAS": "ant_height"}, inplace=True)
                         # AER_ID is not unique in original ANFR data. FIXME: is STAANT needed ?
-                        df_staant = df[['station_name','antenna_id']]
-                        df_staant.to_sql('legacy_staant', conn, if_exists='replace', index=False)
+                        #df_staant = df[['station_name','antenna_id']]
+                        #df_staant.to_sql('legacy_staant', conn, if_exists='replace', index=False)
+
                         #dfgroup = df.groupby('AER_ID', as_index=False)
                         #df = dfgroup[['TAE_ID', 'AER_NB_DIMENSION', 'AER_FG_RAYON', 'AER_NB_AZIMUT', 'AER_NB_ALT_BAS', 'SUP_ID']].first()
                         df.set_index('antenna_id', inplace=True)
@@ -203,11 +235,12 @@ def import_etalab_zip(dbfilename, dirpath='etalab', coalesce=False):
                     else:
                         print(f"Unknown type {tablename}")
 
-                    cur.execute("drop table if exists " + tablename)
-                    df.columns = list(map(lambda x: x.lower(), df.columns))
-                    df.index.name = "id"
-                    #df.to_sql(tablename, conn, if_exists='replace', index_label=pk[tablename], dtype={pk[tablename]: 'INTEGER primary key'})
-                    df.to_sql(tablename, conn, if_exists='replace', index_label="id", dtype={"id": 'INTEGER primary key'})
+                    if df is not None:
+                        cur.execute("drop table if exists " + tablename)
+                        df.columns = list(map(lambda x: x.lower(), df.columns))
+                        df.index.name = "id"
+                        #df.to_sql(tablename, conn, if_exists='replace', index_label=pk[tablename], dtype={pk[tablename]: 'INTEGER primary key'})
+                        df.to_sql(tablename, conn, if_exists='replace', index_label="id", dtype={"id": 'INTEGER primary key'})
     #create_views(dbfilename)
 
 def gen_sites(dbfilename):
