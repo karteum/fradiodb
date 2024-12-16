@@ -243,7 +243,7 @@ def import_anfr_zip(dbfilename, dirpath='etalab', coalesce=False):
                         df.to_sql(tablename, conn, if_exists='replace', index_label="id", dtype={"id": 'INTEGER primary key'})
     #create_views(dbfilename)
 
-def gen_sites(dbfilename):
+def gen_sites(dbfilename, dbfilename2=None):
     with sqlite3.connect(dbfilename) as conn:
         cur = conn.cursor()
         global SYSLIST
@@ -251,15 +251,19 @@ def gen_sites(dbfilename):
         conn.create_function("mask_low", 1, mask_from_list_low64)
         conn.create_function("mask_high", 1, mask_from_list_high64)
         print("gen_sites")
-        cur.executescript("""drop table if exists gen_sites ;
-                             create table gen_sites as
+        attachnewdb=f"attach database '{dbfilename2}' as newdb;" if dbfilename2 is not None else ""
+        newdb="newdb." if dbfilename2 is not None else ""
+        print(newdb)
+        cur.executescript(f"""{attachnewdb}
+                             drop table if exists {newdb}gen_sites ;
+                             create table {newdb}gen_sites as
                                 select sites.id, sites.dms, lon, lat,
                                 count(distinct supports.id) support_count, group_concat(distinct supports.id) support_list, max(sup_height) h_max,
                                 count(distinct station_name) sta_count, group_concat(distinct station_name) sta_list,
                                 count(distinct antennas.id) ant_count, group_concat(distinct antennas.id) ant_list,
                                 count(distinct system) tech_count, group_concat(distinct system) tech_list,
                                 count(distinct transmitters.id) tx_count, group_concat(distinct transmitters.id) tx_list,
-                                count(distinct transmitters_bands.band_id) band_count,group_concat(distinct transmitters_bands.band_id) band_list,
+                                count(distinct bandstr) band_count, group_concat(distinct bandstr) band_list,
                                 inseecode, 0 as bitmask1, 0 as bitmask2
 
                                 from sites
@@ -267,30 +271,19 @@ def gen_sites(dbfilename):
                                 inner join supports on sites.id=supports.site_id
                                 inner join transmitters on transmitters.antenna_id=antennas.id
                                 inner join id_systems on transmitters.system_id=id_systems.id
-                                inner join transmitters_bands on transmitters_bands.transmitter_id=transmitters.id
+                                inner join (select bandgroup_id, (fmin_kHz||'-'||fmax_kHz) bandstr from bandgroups) foo on transmitters.bandgroup_id=foo.bandgroup_id
                                 group by sites.id;
 
-                             update gen_sites set bitmask1=mask_low(tech_list);
-                             update gen_sites set bitmask2=mask_high(tech_list);
-                          """) # anfr_site.cor_dms, nat_lb_nom, tpo_lb
-                                #inner join anfr_id_proprietaire on anfr_id_proprietaire.tpo_id=anfr_support.tpo_id
-                                #inner join anfr_id_nature on anfr_id_nature.nat_id=anfr_support.nat_id
-                                #, group_concat(adm_lb_nom),
-                                #inner join anfr_station on anfr_station.sta_nm_anfr=anfr_emetteur.sta_nm_anfr
-                                #inner join anfr_id_exploitant on anfr_id_exploitant.adm_id=anfr_station.adm_id
-                                #inner join anfr_id_nature on anfr_id_nature.nat_id=anfr_support.nat_id
-                                #inner join anfr_id_proprietaire on anfr_id_proprietaire.tpo_id=anfr_support.tpo_id
-                                # mask_low(group_concat(distinct emr_lb_systeme)), mask_high(group_concat(distinct emr_lb_systeme)) tech_bitmask2,
-                                #inner join anfr_id_proprietaire on anfr_id_proprietaire.tpo_id=anfr_support.tpo_id
+                             update {newdb}gen_sites set bitmask1=mask_low(tech_list);
+                             update {newdb}gen_sites set bitmask2=mask_high(tech_list);
 
-        print("gen_sectors")
-        cur.executescript("""drop table if exists gen_sectors ;
-                             create table gen_sectors as
+                             drop table if exists {newdb}gen_sectors ;
+                             create table {newdb}gen_sectors as
                                 select antennas.id, azimuth, ant_height, lon, lat, antennas.sup_id,
                                 sup_height, transmitters.station_name, operator,
                                 count(distinct system) tech_count, group_concat(distinct system) tech_list,
                                 count(distinct transmitters.id) tx_count, group_concat(distinct transmitters.id) tx_list,
-                                count(distinct transmitters_bands.band_id) band_count,group_concat(distinct transmitters_bands.band_id) band_list,
+                                count(distinct bandstr) band_count, group_concat(distinct bandstr) band_list,
                                 0 as bitmask1, 0 as bitmask2
 
                                 from antennas
@@ -298,18 +291,14 @@ def gen_sites(dbfilename):
                                 inner join sites on sites.id=supports.site_id
                                 inner join transmitters on transmitters.antenna_id=antennas.id
                                 inner join id_systems on transmitters.system_id=id_systems.id
-                                inner join transmitters_bands on transmitters_bands.transmitter_id=transmitters.id
                                 inner join stations on stations.station_name=transmitters.station_name
+                                inner join (select bandgroup_id, (fmin_kHz||'-'||fmax_kHz) bandstr from bandgroups) foo on transmitters.bandgroup_id=foo.bandgroup_id
                                 inner join id_operators on id_operators.id=stations.operator_id
                                 group by antennas.id;
 
-                             update gen_sectors set bitmask1=mask_low(tech_list);
-                             update gen_sectors set bitmask2=mask_high(tech_list);
-                          """) # tae_lb,  tpo_lb,com_cd_insee insee,nat_lb_nom,
-                                #inner join anfr_id_proprietaire on anfr_id_proprietaire.tpo_id=anfr_support.tpo_id
-                                #inner join anfr_id_nature on anfr_id_nature.nat_id=anfr_support.nat_id
-                                #inner join anfr_id_type_antenne on anfr_id_type_antenne.tae_id=anfr_antenne.tae_id
-                                #mask_low(group_concat(distinct emr_lb_systeme)) tech_bitmask1, mask_high(group_concat(distinct emr_lb_systeme)) tech_bitmask2,
+                             update {newdb}gen_sectors set bitmask1=mask_low(tech_list);
+                             update {newdb}gen_sectors set bitmask2=mask_high(tech_list);
+                          """)
 
 def mask_from_list_low64(strlist, masklist=None):
     if pd.isna(strlist): return None
