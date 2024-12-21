@@ -24,14 +24,14 @@ import sys
     # select * from anfr_support where sup_id not in (select sup_id from anfr_antenne)
     # select * from anfr_emetteur where aer_id not in (select aer_id from anfr_antenne)
 
-def download_data(dirpath='etalab'):
+def download_data(dirpath='anfr'):
     # From https://www.data.gouv.fr/fr/datasets/donnees-sur-les-installations-radioelectriques-de-plus-de-5-watts-1/
     if not exists(dirpath):
         makedirs(dirpath)
     URLS = {
-        "etalab_stations.zip": "https://www.data.gouv.fr/fr/datasets/r/f03b1594-d0fe-4b2c-8b11-497d014cdcd0",
-        "etalab_stations_ids.zip": "https://www.data.gouv.fr/fr/datasets/r/56126eb6-5c22-4de5-a816-e02d5146c7b2",
-        "densites.xlsx": "https://www.insee.fr/fr/statistiques/fichier/6439600/grille_densite_7_niveaux_2023.xlsx" # https://www.insee.fr/fr/information/6439600
+        "anfr_stations.zip": "https://www.data.gouv.fr/fr/datasets/r/71ba9313-6610-47d7-a5b7-ffaf2fc2427b",
+        "anfr_stations_ids.zip": "https://www.data.gouv.fr/fr/datasets/r/dbf19e30-f750-4b25-9dd4-ace5e7d266bb"
+        #"densites.xlsx": "https://www.insee.fr/fr/statistiques/fichier/6439600/grille_densite_7_niveaux_2023.xlsx" # https://www.insee.fr/fr/information/6439600
     }
     for k,v in URLS.items():
         print(f"Downloading {k}")
@@ -44,7 +44,7 @@ def coalesce_freqs(df, idfieldname="transmitter_id"):
     kk=0
     df.sort_values(by='fmin_kHz', inplace=True) # FIXME: needed ?
     for row in df.iterrows():
-        sys.stderr.write(f"\rCoalescing freq entries: {100 * kk // len(df)} %")
+        #sys.stderr.write(f"\rCoalescing freq entries: {100 * kk // len(df)} %")
         kk+=1
         emr_id,fmin,fmax = row[1]
         if pd.isna(fmin) or pd.isna(fmax): continue
@@ -89,7 +89,7 @@ def fix_insee_postcode(df):
 def dfdiff(df1, df2):
     return pd.concat([df1,df2]).drop_duplicates(keep=False)
 
-def import_anfr_zip(dbfilename, dirpath='etalab', coalesce=False):
+def import_anfr_zip(dbfilename, dirpath='anfr', coalesce=False):
     """Import data from zipped files from data.gouv.fr into a local SQLite DB, with some refinements (e.g. convert DMS coordinates to linear)"""
     if exists(dbfilename):
         remove (dbfilename)
@@ -97,7 +97,7 @@ def import_anfr_zip(dbfilename, dirpath='etalab', coalesce=False):
         cur = conn.cursor()
         df_bandgroup_emr = None
         df_transmitters = None
-        for myzipfile in glob(dirpath + sep + "*etalab*.zip"): # [dirpath + sep + x for x in listdir(dirpath) if x.endswith('.zip')]:
+        for myzipfile in glob(dirpath + sep + "*anfr*.zip"): # [dirpath + sep + x for x in listdir(dirpath) if x.endswith('.zip')]:
             with zipfile.ZipFile(myzipfile) as zFile:
                 for csvfile in zFile.infolist():
                     table_rename = {'sup_exploitant': 'id_operators',
@@ -244,6 +244,7 @@ def import_anfr_zip(dbfilename, dirpath='etalab', coalesce=False):
     #create_views(dbfilename)
 
 def gen_sites(dbfilename, dbfilename2=None):
+    if dbfilename2==dbfilename: dbfilename2=None
     with sqlite3.connect(dbfilename) as conn:
         cur = conn.cursor()
         global SYSLIST
@@ -253,7 +254,6 @@ def gen_sites(dbfilename, dbfilename2=None):
         print("gen_sites")
         attachnewdb=f"attach database '{dbfilename2}' as newdb;" if dbfilename2 is not None else ""
         newdb="newdb." if dbfilename2 is not None else ""
-        print(newdb)
         cur.executescript(f"""{attachnewdb}
                              drop table if exists {newdb}gen_sites ;
                              create table {newdb}gen_sites as
@@ -346,21 +346,17 @@ def tablength(dbfilename):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("dbfile", help="DB path")
-    parser.add_argument("--download", "-d", help="Display files from dirA that are in dirB", action='store_true', default=False)
-    parser.add_argument("--usedir", "-u", help="Data location", action='store_true', default=False)
-    parser.add_argument("--sectors", "-s", help="Make table 'sectors'", action='store_true', default=False)
-    parser.add_argument("--reset", "-r", help="Reset DB", action='store_true', default=False)
+    parser.add_argument("--download", "-d", help="Download data from data.gouv.fr", action='store_true', default=False)
+    parser.add_argument("--datadir", "-p", help="Data location", default="anfr")
+    parser.add_argument("--importdb", "-i", help="Import CSV into DB", default=None)
+    parser.add_argument("--gensectorsdb", "-g", help="Create additional table/DB with summarized data", default=None)
 
     args = parser.parse_args()
-    dirpath = args.usedir if args.usedir else "etalab"
     if args.download:
-        download_data(dirpath)
-
-    if args.reset:
+        download_data(args.datadir)
+    if args.importdb is not None:
         #import_cities(args.dbfile, dirpath=mydir)
-        import_etalab_zip(args.dbfile, dirpath=dirpath)
-    if args.sectors:
-        #create_imtsectors_table(args.dbfile)
-        #mask_v_support(args.dbfile)
-        gen_sites(args.dbfile)
+        import_anfr_zip(args.importdb, dirpath=args.datadir)
+    if args.gensectorsdb is not None:
+        origdb = args.importdb if args.importdb is not None else args.gensectorsdb
+        gen_sites(origdb, args.gensectorsdb)

@@ -1,14 +1,8 @@
-anfr: {
+Radio_sites: {
   id_systems: {
     shape: sql_table
     id: int {constraint: primary_key}
     system: text
-  }
-  id_bands: {
-    shape: sql_table
-    id: int {constraint: primary_key}
-    fmin: int
-    fmax: int
   }
   id_antenna_types: {
     shape: sql_table
@@ -31,6 +25,13 @@ anfr: {
     operator: text
   }
 
+  bandgroups: {
+    shape: sql_table
+    id: int
+    fmin_kHz: int
+    fmax_kHz: int
+  }
+
   sites: {
     shape: sql_table
     id: int {constraint: primary_key}
@@ -48,19 +49,13 @@ anfr: {
     station_id: text {constraint: foreign_key}
     antenna_id: int {constraint: foreign_key}
     system_id: int {constraint: foreign_key}
+    bandgroup_id: int {constraint: foreign_key}
     date_switchedon: timestamp
   }
   transmitters.system_id -> id_systems.id
   transmitters.antenna_id -> antennas.id
   transmitters.station_id -> stations.id
-
-  transmitters_bands: {
-    shape: sql_table
-    transmitter_id: int {constraint: foreign_key}
-    band_id: int {constraint: foreign_key}
-  }
-  transmitters_bands.transmitter_id -> transmitters.id
-  transmitters_bands.band_id -> id_bands.id
+  transmitters.bandgroup_id -> bandgroups.id
 
   antennas: {
     shape: sql_table
