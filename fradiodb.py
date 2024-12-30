@@ -89,6 +89,41 @@ def fix_insee_postcode(df):
 def dfdiff(df1, df2):
     return pd.concat([df1,df2]).drop_duplicates(keep=False)
 
+def import_anfr_zip2(dbfilename, dirpath='anfr'):
+    import csv
+    import io
+    if exists(dbfilename):
+        remove (dbfilename)
+    with sqlite3.connect(dbfilename) as conn:
+        conn.create_function("pytitle", 1, str.title)
+        conn.create_function("pyfix_cp", 2, lambda x, y: -1)
+        conn.create_function("pyfix_insee", 2, lambda x, y: -1)
+        conn.create_function("pyprint", 1, lambda x: print(x))
+        conn.create_function("pycoalesce", 1, lambda x: x)
+        cur = conn.cursor()
+        for myzipfile in glob(dirpath + sep + "*anfr*.zip"):
+            with zipfile.ZipFile(myzipfile) as zFile:
+                for csvfile in zFile.infolist():
+                    tablename = splitext(basename(csvfile.filename))[0].lower()
+                    with zFile.open(csvfile) as binz, io.TextIOWrapper(binz, encoding='iso8859-1' if tablename == "sup_support" else "utf-8") as textz:
+                        print("importing " + csvfile.filename)
+                        reader = csv.reader(textz, delimiter=";")
+                        headers = next(reader)
+                        cur.execute(f"create temp table {tablename} ({','.join(headers)})")
+                        cur.executemany(f"insert into {tablename} values ({','.join(['?' for _ in headers])});", reader)
+                        for h in headers:
+                            cur.execute(f"update {tablename} set {h}=null where {h}=''")
+        with open("schema.sql") as schema:
+            cur.executescript(schema.read())
+        global SYSLIST
+        SYSLIST = [k[0] for k in cur.execute('select system from id_systems').fetchall()]
+        conn.create_function("mask_low", 1, mask_from_list_low64)
+        conn.create_function("mask_high", 1, mask_from_list_high64)
+        cur.execute("update sites set tech_bitmask1=mask_low(tech_list) from (select sid, tech_list from tmp_sites) foo where foo.sid=sites.id")
+        cur.execute("update sites set tech_bitmask2=mask_high(tech_list) from (select sid, tech_list from tmp_sites) foo where foo.sid=sites.id")
+        cur.execute("update antennas set tech_bitmask1=mask_low(tech_list) from (select aid, tech_list from tmp_antennas) foo where foo.aid=antennas.id")
+        cur.execute("update antennas set tech_bitmask2=mask_high(tech_list) from (select aid, tech_list from tmp_antennas) foo where foo.aid=antennas.id")
+
 def import_anfr_zip(dbfilename, dirpath='anfr', coalesce=False):
     """Import data from zipped files from data.gouv.fr into a local SQLite DB, with some refinements (e.g. convert DMS coordinates to linear)"""
     if exists(dbfilename):
