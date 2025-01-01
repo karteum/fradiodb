@@ -28,9 +28,11 @@ create table stations (
     date_created integer,
     date_modified integer,
     date_operational integer,
+    tech_bitmask1 integer,
+    tech_bitmask2 integer,
     foreign key(operator_id) references id_operators(id)
 ) strict;
-insert into stations select DEM_NM_COMSIS, ADM_ID, STA_NM_ANFR, -- store dates as unix epoch
+insert into stations select DEM_NM_COMSIS, ADM_ID, STA_NM_ANFR, NULL, NULL, -- store dates as unix epoch
     strftime('%s', substr(DTE_IMPLANTATION, 7, 4) || '-' || substr(DTE_IMPLANTATION, 4, 2) || '-' || substr(DTE_IMPLANTATION, 1, 2)),
     strftime('%s', substr(DTE_MODIF, 7, 4) || '-' || substr(DTE_MODIF, 4, 2) || '-' || substr(DTE_MODIF, 1, 2)),
     strftime('%s', substr(DTE_EN_SERVICE, 7, 4) || '-' || substr(DTE_EN_SERVICE, 4, 2) || '-' || substr(DTE_EN_SERVICE, 1, 2))
@@ -43,7 +45,6 @@ select pyprint('Processing sup_support');
 --   3°/ regroup all data w.r.t. a site (i.e. address, lat, lon, zipcode, etc) into a dedicated table "sites" instead of repeating it for multiple supports (several supports may be at the same address). Notice that in some cases, the same dms location was leading to various zipcodes (this is corrected with pyfix_cp() and pyfix_insee()) or to different addresses (sometimes similar and sometimes not : in those cases the distinct strings are aggregated with ' ¤ ')
 --   4°/ also avoid the repetitions in table "support" (since one support may host several stations and one station may include equipment on several supports, the field "sta_nm_anfr" was leading to many repeated lines in this table)
 -- select dms, group_concat(distinct adr_nm_cp), group_concat(distinct com_cd_insee), count(dms) c from (select distinct dms, adr_nm_cp, com_cd_insee from tmp_supports) foo group by dms having c>1
-update sup_support set ADR_LB_LIEU=NULL where ADR_LB_LIEU='-' or ADR_LB_LIEU=char(9);
 create temp table tmp_supports as select distinct
     sup_id, NAT_ID, SUP_NM_HAUT, tpo_id, ADR_NM_CP, COM_CD_INSEE, --sta_nm_anfr
     COR_NB_DG_LAT||'°'||COR_NB_MN_LAT||''''||COR_NB_SC_LAT||'"'||COR_CD_NS_LAT||' '||COR_NB_DG_LON||'°'||COR_NB_MN_LON||''''||COR_NB_SC_LON||'"'||COR_CD_EW_LON dms,
@@ -79,12 +80,15 @@ create table supports (
     owner_id integer,
     site_id integer,
     sup_height integer,
+    tech_bitmask1 integer,
+    tech_bitmask2 integer,
     foreign key(suptype_id) references id_support_types(id),
     foreign key(owner_id) references id_support_owners(id),
     foreign key(site_id) references sites(id)
 ) strict;
-insert into supports select distinct cast(sup_id as integer), cast(NAT_ID as integer), cast(TPO_ID as integer), sites.id, cast(SUP_NM_HAUT as real)
+insert into supports select distinct cast(sup_id as integer), cast(NAT_ID as integer), cast(TPO_ID as integer), sites.id, cast(SUP_NM_HAUT as real), NULL, NULL
     from tmp_supports inner join sites on tmp_supports.dms=sites.dms;
+drop table tmp_supports;
 
 select pyprint('Processing sup_antenna');
 create table antennas (
@@ -105,12 +109,14 @@ insert into antennas select distinct AER_ID, TAE_ID, SUP_ID, cast(AER_NB_DIMENSI
 
 select pyprint('Processing sup_bande');
 -- Several transformations made here in order to factorize the data from sup_bande in a much shorter table "bandgroups", noting that one transmitter is associated with a single bandgroup and many transmitters operate with the same set of bands (e.g. sites from mobile operators)
-create temp view tmp_bands as select distinct EMR_ID, cast(round(fmin*unit) as text) ||'_'||cast(round(fmax*unit) as text) fstr from
-    (select EMR_ID, (case BAN_FG_UNITE when 'K' then 1 when 'M' then 1000 when 'G' then 1000000 end) unit, cast(BAN_NB_F_DEB as real) fmin, cast(BAN_NB_F_FIN as real) fmax from sup_bande);
-create temp view tmp_bands2 as select emr_id, '["'||group_concat(fstr, '","')||'"]' gstr from tmp_bands group by emr_id;
-create temp table tmp_bands3 as select distinct gstr, pycoalesce(gstr) jstr from tmp_bands2; -- must be a table (not view) because we further need rowid
+create temp view tmp_bands as select distinct EMR_ID, round(fmin*unit) fmin_kHz, round(fmax*unit) fmax_kHz, cast(round(fmin*unit) as text) ||'_'||cast(round(fmax*unit) as text) fstr from
+        (select EMR_ID, (case BAN_FG_UNITE when 'K' then 1 when 'M' then 1000 when 'G' then 1000000 end) unit, cast(BAN_NB_F_DEB as real) fmin, cast(BAN_NB_F_FIN as real) fmax
+        from sup_bande where BAN_FG_UNITE is not null and BAN_NB_F_DEB is not null and BAN_NB_F_FIN is not null) -- FIXME: and BAN_NB_F_DEB!=BAN_NB_F_FIN ?
+    order by fmin_kHz, fmax_kHz, EMR_ID;
+create temp view tmp_bands2 as select emr_id, pycoalesce('["'||group_concat(fstr, '","')||'"]') jstr from tmp_bands group by emr_id;
+create temp table tmp_bands3 as select distinct jstr from tmp_bands2; -- must be a table (not view) because we further need rowid
 create temp view tmp_bands4 as select t.rowid id, j.value fstr from tmp_bands3 t, json_each(t.jstr) j; -- explode()
-create temp view tmp_bands5 as select emr_id, tmp_bands3.rowid bandgroup_id from tmp_bands2 inner join tmp_bands3 on tmp_bands2.gstr=tmp_bands3.gstr;
+create temp view tmp_bands5 as select emr_id, tmp_bands3.rowid bandgroup_id from tmp_bands2 inner join tmp_bands3 on tmp_bands2.jstr=tmp_bands3.jstr;
 create table bandgroups (
     id integer,
     fmin_kHz integer,
@@ -123,6 +129,7 @@ select pyprint('Processing sup_emetteur');
 create table id_systems (id integer primary key, system text) strict;
 insert into id_systems(system) select distinct EMR_LB_SYSTEME from sup_emetteur where EMR_LB_SYSTEME != '' order by EMR_LB_SYSTEME;
 
+-- Notice that several transmitters may be associated to a single antenna (e.g. MORAN) and several stations may be associated to a single transmitter (e.g. MOCN)
 create table transmitters (
     id integer primary key,
     station_id integer,
@@ -146,11 +153,11 @@ select pyprint('Adding views');
 create view v_sites as
     select sites.id, sites.dms, lon, lat, inseecode,
     count(distinct supports.id) support_count, group_concat(distinct supports.id) support_list, max(sup_height) h_max,
-    count(distinct station_id) sta_count, group_concat(distinct station_id) sta_list,
-    count(distinct antennas.id) ant_count, group_concat(distinct antennas.id) ant_list,
-    count(distinct system) tech_count, group_concat(distinct system) tech_list,
-    count(distinct transmitters.id) tx_count, group_concat(distinct transmitters.id) tx_list,
-    count(distinct bandstr) band_count, group_concat(distinct bandstr) band_list,
+    count(distinct station_id) sta_count, cast(group_concat(distinct station_id) as text) sta_list,
+    count(distinct antennas.id) ant_count, cast(group_concat(distinct antennas.id) as text) ant_list,
+    count(distinct system) tech_count, cast(group_concat(distinct system) as text) tech_list,
+    count(distinct transmitters.id) tx_count, cast(group_concat(distinct transmitters.id) as text) tx_list,
+    count(distinct bandstr) band_count, cast(group_concat(distinct bandstr) as text) band_list,
     sites.tech_bitmask1, sites.tech_bitmask2
     from sites
     inner join antennas on antennas.sup_id=supports.id
@@ -163,9 +170,9 @@ create view v_sites as
 create view v_sectors as
     select antennas.id, azimuth, ant_height, lon, lat, antennas.sup_id,
     sup_height, transmitters.station_id, operator,
-    count(distinct system) tech_count, group_concat(distinct system) tech_list,
-    count(distinct transmitters.id) tx_count, group_concat(distinct transmitters.id) tx_list,
-    count(distinct bandstr) band_count, group_concat(distinct bandstr) band_list,
+    count(distinct system) tech_count, cast(group_concat(distinct system) as text) tech_list,
+    count(distinct transmitters.id) tx_count, cast(group_concat(distinct transmitters.id) as text) tx_list,
+    count(distinct bandstr) band_count, cast(group_concat(distinct bandstr) as text) band_list,
     antennas.tech_bitmask1, antennas.tech_bitmask2
     from antennas
     inner join supports on antennas.sup_id=supports.id
@@ -175,22 +182,4 @@ create view v_sectors as
     inner join stations on stations.id=transmitters.station_id
     inner join (select id, (fmin_kHz||'-'||fmax_kHz) bandstr from bandgroups) foo on transmitters.bandgroup_id=foo.id
     inner join id_operators on id_operators.id=stations.operator_id
-    group by antennas.id;
-
--- tech_bitmask shall be processed later within Python, based on those tables
-select pyprint('Processing Bitmasks');
-create temp table tmp_sites as
-    select sites.id sid, count(distinct system) tech_count, group_concat(distinct system) tech_list
-    from sites
-    inner join antennas on antennas.sup_id=supports.id
-    inner join supports on sites.id=supports.site_id
-    inner join transmitters on transmitters.antenna_id=antennas.id
-    inner join id_systems on transmitters.system_id=id_systems.id
-    group by sites.id;
-
-create temp table tmp_antennas as
-    select antennas.id aid, count(distinct system) tech_count, group_concat(distinct system) tech_list
-    from antennas
-    inner join transmitters on transmitters.antenna_id=antennas.id
-    inner join id_systems on transmitters.system_id=id_systems.id
     group by antennas.id;

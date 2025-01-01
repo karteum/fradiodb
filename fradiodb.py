@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
@@ -14,7 +14,6 @@ import pandas as pd
 from numpy import round
 import argparse
 import urllib.request as req
-import sys
 
 # Schema diagram: d2 ./schema.d2 -s -t 100
 # 'NC': ('New Caledonia', (164.029605748, -22.3999760881, 167.120011428, -20.1056458473)),
@@ -67,6 +66,31 @@ def coalesce_freqs(df, idfieldname="transmitter_id"):
             res.append([k , int(fc.real), int(fc.imag)])
     return pd.DataFrame(data=res, columns=[idfieldname,"fmin_kHz","fmax_kHz"])
 
+def coalesce_freqs2(bandlist_str):
+    # bandlist_str is a string listing several bands fmin_fmax, sorted by fmin
+    # small trick: (fmin,fmax) is encoded as (real,imag) to avoid nested lists and associated performance issues
+    if bandlist_str is None: return None
+    if not ',' in bandlist_str: return bandlist_str
+    bands = [0+0j]
+    for band in bandlist_str.replace('[','').replace(']','').replace('"','').split(','):
+        fminmax = band.split('_')
+        fmin = int(float(fminmax[0]))
+        fmax = int(float(fminmax[1]))
+        gmin = int(bands[-1].real)
+        gmax = int(bands[-1].imag)
+        if fmin>=gmin and fmin<=gmax and fmax>=gmin and fmax<=gmax: pass  # Band included within previous one
+        elif fmin>=gmin and fmin<=gmax: bands[-1] = gmin+1j*fmax  # Extend previous band upwards
+        elif fmax>=gmin and fmax<=gmax: # Extend previous band downwards. FIXME: should not happen if list sorted by fmin
+            bands[-1] = fmin+1j*gmax
+            print(f"error {bands}")
+        else: bands.append(fmin + 1j*fmax)
+    res = '["' + '","'.join([str(band.real) + '_' + str(band.imag) for band in bands[1:]]) + '"]'
+    #if res != bandlist_str:
+    #    print(bandlist_str)
+    #    print(res)
+    #    print("_________")
+    return res 
+
 def fix_insee_postcode(df):
     import geopandas as gpd
     CRS_WGS84=4326
@@ -99,7 +123,7 @@ def import_anfr_zip2(dbfilename, dirpath='anfr'):
         conn.create_function("pyfix_cp", 2, lambda x, y: -1)
         conn.create_function("pyfix_insee", 2, lambda x, y: -1)
         conn.create_function("pyprint", 1, lambda x: print(x))
-        conn.create_function("pycoalesce", 1, lambda x: x)
+        conn.create_function("pycoalesce", 1, coalesce_freqs2)
         cur = conn.cursor()
         for myzipfile in glob(dirpath + sep + "*anfr*.zip"):
             with zipfile.ZipFile(myzipfile) as zFile:
@@ -112,17 +136,32 @@ def import_anfr_zip2(dbfilename, dirpath='anfr'):
                         cur.execute(f"create temp table {tablename} ({','.join(headers)})")
                         cur.executemany(f"insert into {tablename} values ({','.join(['?' for _ in headers])});", reader)
                         for h in headers:
-                            cur.execute(f"update {tablename} set {h}=null where {h}=''")
-        with open("schema.sql") as schema:
+                            cur.execute(f"update {tablename} set {h}=null where trim({h}) in ('','-',char(9))")
+        with open("schema.sql", encoding='utf-8') as schema:
             cur.executescript(schema.read())
+
+def do_bitmask(dbfilename):
+    with sqlite3.connect(dbfilename) as conn:
+        cur = conn.cursor()
         global SYSLIST
         SYSLIST = [k[0] for k in cur.execute('select system from id_systems').fetchall()]
         conn.create_function("mask_low", 1, mask_from_list_low64)
         conn.create_function("mask_high", 1, mask_from_list_high64)
-        cur.execute("update sites set tech_bitmask1=mask_low(tech_list) from (select sid, tech_list from tmp_sites) foo where foo.sid=sites.id")
-        cur.execute("update sites set tech_bitmask2=mask_high(tech_list) from (select sid, tech_list from tmp_sites) foo where foo.sid=sites.id")
-        cur.execute("update antennas set tech_bitmask1=mask_low(tech_list) from (select aid, tech_list from tmp_antennas) foo where foo.aid=antennas.id")
-        cur.execute("update antennas set tech_bitmask2=mask_high(tech_list) from (select aid, tech_list from tmp_antennas) foo where foo.aid=antennas.id")
+        for table in ('sites', 'supports', 'stations', 'antennas'):
+            print(f'Computing tech_bitmask for {table}')
+            cur.executescript(f"""
+                create temp table tmp_{table} as
+                    select {table}.id tmp_id, group_concat(distinct system) tech_list
+                    from {table}
+                    {"inner join supports on sites.id=supports.site_id" if table=="sites" else ""}
+                    {"inner join antennas on antennas.sup_id=supports.id" if table in ("sites", "supports") else ""}
+                    inner join transmitters on transmitters.{"station_id=stations.id" if table=="stations" else "antenna_id=antennas.id"}
+                    inner join id_systems on transmitters.system_id=id_systems.id
+                    group by {table}.id;
+                update {table} set tech_bitmask1=mask_low(tech_list) from (select tmp_id, tech_list from tmp_{table}) foo where foo.tmp_id={table}.id;
+                update {table} set tech_bitmask2=mask_high(tech_list) from (select tmp_id, tech_list from tmp_{table}) foo where foo.tmp_id={table}.id;
+                drop table tmp_{table};
+            """)
 
 def import_anfr_zip(dbfilename, dirpath='anfr', coalesce=False):
     """Import data from zipped files from data.gouv.fr into a local SQLite DB, with some refinements (e.g. convert DMS coordinates to linear)"""
