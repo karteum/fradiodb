@@ -24,7 +24,7 @@ update sup_station set DTE_MODIF=NULL where DTE_MODIF='';
 create table stations (
     id integer primary key,
     operator_id integer,
-    station_name text,
+    station_name text unique,
     date_created integer,
     date_modified integer,
     date_operational integer,
@@ -150,8 +150,11 @@ insert into transmitters select sup_emetteur.EMR_ID, stations.id, AER_ID, id_sys
 
 select pyprint('Adding views');
 -- Add a couple of views for convenience
+create view v_bandgroups as select id, count(fmin_kHz) band_count, group_concat(fmin_kHz||'-'||fmax_kHz) bandstr, sum(fmax_kHz-fmin_kHz) BWtot from bandgroups group by id;
+
 create view v_sites as
     select sites.id, sites.dms, lon, lat, inseecode,
+    count(distinct operator) operator_count, cast(group_concat(distinct operator) as text) operator_list,
     count(distinct supports.id) support_count, group_concat(distinct supports.id) support_list, max(sup_height) h_max,
     count(distinct station_id) sta_count, cast(group_concat(distinct station_id) as text) sta_list,
     count(distinct antennas.id) ant_count, cast(group_concat(distinct antennas.id) as text) ant_list,
@@ -164,12 +167,15 @@ create view v_sites as
     inner join supports on sites.id=supports.site_id
     inner join transmitters on transmitters.antenna_id=antennas.id
     inner join id_systems on transmitters.system_id=id_systems.id
-    inner join (select id, (fmin_kHz||'-'||fmax_kHz) bandstr from bandgroups) foo on transmitters.bandgroup_id=foo.id
+    inner join v_bandgroups on transmitters.bandgroup_id=v_bandgroups.id
+    inner join stations on stations.id=transmitters.station_id
+    inner join id_operators on id_operators.id=stations.operator_id
     group by sites.id;
 
-create view v_sectors as
+create view v_antennas as
     select antennas.id, azimuth, ant_height, lon, lat, antennas.sup_id,
-    sup_height, transmitters.station_id, operator,
+    sup_height, transmitters.station_id,
+    count(distinct operator) operator_count, cast(group_concat(distinct operator) as text) operator_list,
     count(distinct system) tech_count, cast(group_concat(distinct system) as text) tech_list,
     count(distinct transmitters.id) tx_count, cast(group_concat(distinct transmitters.id) as text) tx_list,
     count(distinct bandstr) band_count, cast(group_concat(distinct bandstr) as text) band_list,
@@ -180,6 +186,14 @@ create view v_sectors as
     inner join transmitters on transmitters.antenna_id=antennas.id
     inner join id_systems on transmitters.system_id=id_systems.id
     inner join stations on stations.id=transmitters.station_id
-    inner join (select id, (fmin_kHz||'-'||fmax_kHz) bandstr from bandgroups) foo on transmitters.bandgroup_id=foo.id
+    inner join v_bandgroups on transmitters.bandgroup_id=v_bandgroups.id
     inner join id_operators on id_operators.id=stations.operator_id
     group by antennas.id;
+
+create view v_transmitters as
+    select transmitters.id, antenna_id, station_name, operator, bandstr, system
+    from transmitters
+    inner join stations on stations.id=transmitters.station_id
+    inner join id_operators on id_operators.id=stations.operator_id
+    inner join id_systems on transmitters.system_id=id_systems.id
+    inner join v_bandgroups on transmitters.bandgroup_id=v_bandgroups.id;

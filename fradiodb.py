@@ -60,6 +60,7 @@ def coalesce_freqs(bandlist_str):
 
 def import_anfr_zip(dbfilename, dirpath='anfr'):
     if exists(dbfilename):
+        print("Deleting previous DB")
         remove (dbfilename)
     with sqlite3.connect(dbfilename) as conn:
         conn.create_function("pytitle", 1, str.title)
@@ -108,21 +109,22 @@ def import_anfr_zip(dbfilename, dirpath='anfr'):
                 drop table tmp_{table};
             """)
 
-def mask_from_list_low64(strlist, masklist=None):
+def mask_from_list(strlist, masklist=None):
     if strlist is None: return None
     if masklist is None: masklist = SYSLIST
     mask = 0
     for entry in strlist.split(','):
         mask |= (1<<masklist.index(entry))
-    return mask128_low64(mask)
-def mask_from_list_high64(strlist, masklist=None):
-    if strlist is None: return None
-    if masklist is None: masklist = SYSLIST
-    mask = 0
-    for entry in strlist.split(','):
-        mask |= (1<<masklist.index(entry))
-    return mask128_high64(mask)
+    return mask
+# MAX_BIT=52+1 because 1°/ sqlite does not deal well with unsigned 64 ints so the last bit is not usable, and
+#   2°/ Excel and Libreoffice have accuracy issues with MAX_BIT>52 because they compute as IEEE754 double floats and the mantissa has 52 useful bits (and I want to keep the spreadsheet for easy mask calculations)
+MAX_BIT = 52+1
+def mask128_low64(mask128): return mask128 & ((1<<MAX_BIT)-1)
+def mask128_high64(mask128): return mask128 >> MAX_BIT
+def mask_from_list_low64(strlist, masklist=None): return mask128_low64(mask_from_list(strlist, masklist))
+def mask_from_list_high64(strlist, masklist=None): return mask128_high64(mask_from_list(strlist, masklist))
 
+def masks64_to_mask128(mask_low, mask_high): return mask_low | (mask_high << MAX_BIT)
 def list_from_mask(mask, masklist=None):
     if masklist is None: masklist = SYSLIST
     alist = []
@@ -130,10 +132,6 @@ def list_from_mask(mask, masklist=None):
         if mask & (1<<bit):
             alist.append(masklist[bit])
     return ','.join(alist)
-
-def mask128_low64(mask128): return mask128 & ((1<<63)-1)  # 63 because sqlite does not deal well with unsigned 64 ints
-def mask128_high64(mask128): return mask128 >> 63
-def masks64_to_mask128(mask_low, mask_high): return mask_low | (mask_high << 63)
 
 def tablength(dbfilename):
     """List DB tables and size by decreasing number of entries"""
