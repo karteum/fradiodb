@@ -1,3 +1,95 @@
+-- MIME: application/geopackage+sqlite3
+-- Required GeoPackage SQLite settings
+PRAGMA application_id = 1196437808;   -- 0x47504B47 ("GPKG")
+PRAGMA user_version = 10300;          -- GeoPackage version 1.3.0
+
+-- Spatial reference systems
+CREATE TABLE gpkg_spatial_ref_sys (
+    srs_name TEXT NOT NULL,
+    srs_id INTEGER PRIMARY KEY,
+    organization TEXT NOT NULL,
+    organization_coordsys_id INTEGER NOT NULL,
+    definition  TEXT NOT NULL,
+    description TEXT
+);
+INSERT INTO gpkg_spatial_ref_sys VALUES ('Undefined Cartesian SRS', -1, 'NONE', -1, 'undefined', 'undefined Cartesian coordinate reference system');
+INSERT INTO gpkg_spatial_ref_sys VALUES ('Undefined geographic SRS', 0, 'NONE', 0, 'undefined', 'undefined geographic coordinate reference system');
+INSERT INTO gpkg_spatial_ref_sys VALUES ('WGS 84 geodetic', 4326, 'EPSG', 4326, 'GEOGCS["WGS 84",DATUM["World Geodetic System 1984", SPHEROID["WGS 84",6378137,298.257223563]], PRIMEM["Greenwich",0], UNIT["degree",0.0174532925199433]]', 'longitude/latitude coordinates in decimal degrees on the WGS 84 spheroid');
+
+-- Contents table
+CREATE TABLE gpkg_contents (
+    table_name TEXT NOT NULL PRIMARY KEY,
+    data_type TEXT NOT NULL,
+    identifier TEXT UNIQUE,
+    description TEXT DEFAULT '',
+    last_change DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    min_x DOUBLE,
+    min_y DOUBLE,
+    max_x DOUBLE,
+    max_y DOUBLE,
+    srs_id INTEGER,
+    CONSTRAINT fk_gc_r_srs_id FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys(srs_id)
+);
+INSERT INTO gpkg_contents (table_name, data_type, identifier, description, srs_id) VALUES ('sites', 'features', 'sites', 'Radio tower locations', 4326);
+INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('stations', 'attributes', 'stations');
+INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('antennas', 'attributes', 'antennas');
+INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('bandgroups', 'attributes', 'bandgroups');
+INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('transmitters', 'attributes', 'transmitters');
+INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('supports', 'attributes', 'supports');
+INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('id_systems', 'attributes', 'id_systems');
+INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('id_antenna_types', 'attributes', 'id_antenna_types');
+INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('id_operators', 'attributes', 'id_operators');
+INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('id_support_owners', 'attributes', 'id_support_owners');
+INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('id_support_types', 'attributes', 'id_support_types');
+
+-- Geometry columns table
+CREATE TABLE gpkg_geometry_columns (
+    table_name TEXT NOT NULL,
+    column_name TEXT NOT NULL,
+    geometry_type_name TEXT NOT NULL,
+    srs_id INTEGER NOT NULL,
+    z TINYINT NOT NULL,
+    m TINYINT NOT NULL,
+    CONSTRAINT pk_geom_cols PRIMARY KEY (table_name, column_name),
+    CONSTRAINT uk_gc_table_name UNIQUE (table_name),
+    CONSTRAINT fk_gc_tn FOREIGN KEY (table_name) REFERENCES gpkg_contents(table_name),
+    CONSTRAINT fk_gc_srs FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys (srs_id)
+);
+INSERT INTO gpkg_geometry_columns (table_name, column_name, geometry_type_name, srs_id, z, m) VALUES ('sites', 'geom', 'POINT', 4326, 0, 0);
+
+
+CREATE TABLE sample_feature_table (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  geometry GEOMETRY,
+  text_attribute TEXT,
+  real_attribute REAL,
+  boolean_attribute BOOLEAN,
+  raster_or_photo BLOB
+);
+CREATE TABLE gpkg_tile_matrix_set (
+  table_name TEXT NOT NULL PRIMARY KEY,
+  srs_id INTEGER NOT NULL,
+  min_x DOUBLE NOT NULL,
+  min_y DOUBLE NOT NULL,
+  max_x DOUBLE NOT NULL,
+  max_y DOUBLE NOT NULL,
+  CONSTRAINT fk_gtms_table_name FOREIGN KEY (table_name) REFERENCES gpkg_contents(table_name),
+  CONSTRAINT fk_gtms_srs FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys (srs_id)
+);
+CREATE TABLE gpkg_tile_matrix (
+  table_name TEXT NOT NULL,
+  zoom_level INTEGER NOT NULL,
+  matrix_width INTEGER NOT NULL,
+  matrix_height INTEGER NOT NULL,
+  tile_width INTEGER NOT NULL,
+  tile_height INTEGER NOT NULL,
+  pixel_x_size DOUBLE NOT NULL,
+  pixel_y_size DOUBLE NOT NULL,
+  CONSTRAINT pk_ttm PRIMARY KEY (table_name, zoom_level),
+  CONSTRAINT fk_tmm_table_name FOREIGN KEY (table_name) REFERENCES gpkg_contents(table_name)
+);
+
+------------------------------------------------------------------------------------------------
 -- Starting point : tables are imported from CSV (table name as filename, all fields as text)
 --   N.B. the following script uses user-defined functions in the calling Python code (i.e. in case the calling code is not the original Python script, those functions need to be implemented or the code below has to be modified accordingly):
 --   * pytitle (Python's str.title(), may be replaced by lower())
@@ -65,9 +157,10 @@ create table sites (
     postcode integer,
     inseecode text,
     tech_bitmask1 integer,
-    tech_bitmask2 integer
+    tech_bitmask2 integer,
+    geom BLOB
 ) strict;
-insert into sites(dms,lon,lat,postcode,inseecode) select distinct dms, lon, lat, ADR_NM_CP, COM_CD_INSEE from tmp_supports;
+insert into sites(dms,lon,lat,postcode,inseecode, geom) select distinct dms, lon, lat, ADR_NM_CP, COM_CD_INSEE, pywbkpoint(lon,lat) from tmp_supports;
 update sites set address=addgroup from -- Unfortunately sqlite does not support group_concat(distinct address, ' ¤ ') so this is a workaround
     (select dms, group_concat(address, ' ¤ ') addgroup from
         (select distinct dms, address from tmp_supports)

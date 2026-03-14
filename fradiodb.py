@@ -14,14 +14,9 @@ import csv
 import io
 import argparse
 import urllib.request as req
+import struct
 
 # Schema diagram: d2 ./schema.d2 -s -t 100
-# 'NC': ('New Caledonia', (164.029605748, -22.3999760881, 167.120011428, -20.1056458473)),
-# lon=165E, lat=21S => X=-1358673, Y=-534964
-
-#def sanitycheck(dbfilename):
-    # select * from anfr_support where sup_id not in (select sup_id from anfr_antenne)
-    # select * from anfr_emetteur where aer_id not in (select aer_id from anfr_antenne)
 
 def download_data(dirpath='anfr'):
     # From https://www.data.gouv.fr/fr/datasets/donnees-sur-les-installations-radioelectriques-de-plus-de-5-watts-1/
@@ -58,6 +53,19 @@ def coalesce_freqs(bandlist_str):
     res = '["' + '","'.join([str(band.real) + '_' + str(band.imag) for band in bands[1:]]) + '"]'
     return res 
 
+def wkb_point(lon, lat, srs_id=4326):
+    # https://www.geopackage.org/spec/#gpb_data_blob_format
+    magic = b"GP"            # magic
+    version = 0              # version
+    flags = 1                # little endian, no envelope
+    header = struct.pack("<2sBBi", magic, version, flags, srs_id)
+
+    # WKB geometry
+    byte_order = 1           # little endian
+    geom_type = 1            # POINT
+    wkb = struct.pack("<BIdd", byte_order, geom_type, lon, lat)
+    return header + wkb
+
 def import_anfr_zip(dbfilename, dirpath='anfr'):
     if exists(dbfilename):
         print("Deleting previous DB")
@@ -68,6 +76,7 @@ def import_anfr_zip(dbfilename, dirpath='anfr'):
         conn.create_function("pyfix_insee", 2, lambda x, y: -1)
         conn.create_function("pyprint", 1, lambda x: print(x))
         conn.create_function("pycoalesce", 1, coalesce_freqs)
+        conn.create_function("pywbkpoint", 2, wkb_point)
         cur = conn.cursor()
 
         # Import CSVs into SQL tables
@@ -108,6 +117,12 @@ def import_anfr_zip(dbfilename, dirpath='anfr'):
                 update {table} set tech_bitmask2=mask_high(tech_list) from (select tmp_id, tech_list from tmp_{table}) foo where foo.tmp_id={table}.id;
                 drop table tmp_{table};
             """)
+
+def get_syslist(dbfilename):
+    with sqlite3.connect(dbfilename) as conn:
+        cur = conn.cursor()
+        SYSLIST = [k[0] for k in cur.execute('select system from id_systems').fetchall()]
+    return SYSLIST
 
 def mask_from_list(strlist, masklist=None):
     if strlist is None: return None
