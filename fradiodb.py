@@ -215,17 +215,37 @@ def query_transmitters(conn, antenna_id):
 class fradiodb_web_handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path=="/": self.path="/index.html"
-        if self.path == "/index.html" or self.path == "/anfr.fgb":
+        if self.path == "/index.html":
             try:
                 with open(getcwd()+self.path, "rb") as f:
                     content = f.read()
                 self.send_response(200)
-                self.send_header("Content-Type", "text/html" if self.path == "/index.html"  else "application/x-flatgeobuf")
+                self.send_header("Content-Type", "text/html")
                 self.end_headers()
                 self.wfile.write(content)
             except FileNotFoundError:
                 self.send_error(404)
             return
+        if self.path == "/anfr.fgb":
+            encoding = None
+            enc = self.headers.get("Accept-Encoding", "")
+            if "gzip" in enc and exists("anfr.fgb.gz"):
+                self.path += ".gz"
+                encoding = "gzip"
+                print("gzip")
+            try:
+                with open(getcwd()+self.path, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-flatgeobuf")
+                if encoding:
+                    self.send_header("Content-Encoding", encoding)
+                self.end_headers()
+                self.wfile.write(content)
+            except FileNotFoundError:
+                self.send_error(404)
+            return
+
 
         # Dynamic route /site/<site_id>
         match = re.match(r"^/site/([^/]+)$", self.path)
