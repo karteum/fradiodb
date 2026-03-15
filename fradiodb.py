@@ -7,7 +7,7 @@
 
 import sqlite3
 from glob import glob
-from os import sep,makedirs,remove
+from os import sep,makedirs,remove,getcwd
 from os.path import splitext,basename,exists
 import zipfile
 import csv
@@ -16,6 +16,8 @@ import argparse
 import urllib.request as req
 import struct
 import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import re
 
 # Schema diagram: d2 ./schema.d2 -s -t 100
 
@@ -210,6 +212,35 @@ def query_transmitters(conn, antenna_id):
                                          where antenna_id=?""", (antenna_id,)).fetchall()
     return res_transmitters 
 
+class fradiodb_web_handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path=="/": self.path="/index.html"
+        if self.path == "/index.html" or self.path == "/anfr.fgb":
+            try:
+                with open(getcwd()+self.path, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html" if self.path == "/index.html"  else "application/x-flatgeobuf")
+                self.end_headers()
+                self.wfile.write(content)
+            except FileNotFoundError:
+                self.send_error(404)
+            return
+
+        # Dynamic route /site/<site_id>
+        match = re.match(r"^/site/([^/]+)$", self.path)
+        if match:
+            site_id = match.group(1)
+            payload = query(self.server.dbfile, int(site_id), "site")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(payload.encode("utf-8"))
+            return
+
+        # Otherwise 404
+        self.send_error(404)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("dbfile", help="DB path")
@@ -223,6 +254,9 @@ if __name__ == "__main__":
     parser_query.add_argument("id", help="ID to query")
     parser_query.add_argument("--type", "-t", help="site | support | station | antenna | transmitter", default="site")
 
+    parser_server = subparsers.add_parser('serve', help="REST server")
+    parser_server.add_argument("--port", "-p", help="Port", default=8001)
+
     args = parser.parse_args()
 
     if args.subcommand=='create':
@@ -234,6 +268,8 @@ if __name__ == "__main__":
     elif args.subcommand=='info':
         res = query(args.dbfile, args.id, args.type)
         print(res)
-    elif args.subcommand=='web':
-        res = query(args.dbfile, args.id, args.type)
-        print(res)
+    elif args.subcommand=='serve':
+        server = HTTPServer(("localhost", int(args.port)), fradiodb_web_handler)
+        server.dbfile = args.dbfile
+        print(f"Server running on http://localhost:{args.port}")
+        server.serve_forever()
