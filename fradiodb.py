@@ -15,6 +15,7 @@ import io
 import argparse
 import urllib.request as req
 import struct
+import json
 
 # Schema diagram: d2 ./schema.d2 -s -t 100
 
@@ -165,15 +166,74 @@ def tablength(dbfilename):
         print(f"{res[k]} : {k}")
     return res
 
+def dict_factory(cursor, row):
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
+def query(dbfilename, itemid, itemtype="site"):
+    conn = sqlite3.connect(dbfilename)
+    conn.row_factory = dict_factory
+    if itemtype=="site":
+        return json.dumps(query_supports(conn, itemid))
+    elif itemtype=='support':
+        return json.dumps(query_antennas(conn, itemid))
+    elif itemtype=='antenna':
+        return json.dumps(query_transmitters(conn, itemid))
+
+def query_supports(conn, site_id):
+    cur  = conn.cursor()
+    res_supports = cur.execute("""select supports.id support_id, support_type, support_owner, sup_height support_height from supports
+                                         inner join id_support_owners on id_support_owners.id=owner_id
+                                         inner join id_support_types on id_support_types.id=suptype_id
+                                         where site_id=?""", (site_id,)).fetchall()
+    for res in res_supports:
+        res['antennas'] = query_antennas(conn, res['support_id'])
+    return res_supports
+
+def query_antennas(conn, support_id):
+    cur  = conn.cursor()
+    res_antennas = cur.execute("""select antennas.id antenna_id, dimension, azimuth, ant_height, dim_type, antenna_type from antennas
+                                         inner join id_antenna_types on anttype_id=id_antenna_types.id
+                                         where sup_id=?""", (support_id,)).fetchall()
+    for res in res_antennas:
+        res['transmitters'] = query_transmitters(conn, res['antenna_id'])
+    return res_antennas
+
+def query_transmitters(conn, antenna_id):
+    cur  = conn.cursor()
+    res_transmitters = cur.execute("""select station_name, operator, system, date_switchedon from transmitters
+                                         inner join id_systems on system_id=id_systems.id
+                                         inner join stations on station_id=stations.id
+                                         inner join id_operators on operator_id=id_operators.id
+                                         where antenna_id=?""", (antenna_id,)).fetchall()
+    return res_transmitters 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--download", "-d", help="Download data from data.gouv.fr", action='store_true', default=False)
-    parser.add_argument("--datadir", "-p", help="Data location", default="anfr")
-    parser.add_argument("--importdb", "-i", help="Import CSV into DB", default=None)
+    parser.add_argument("dbfile", help="DB path")
+    subparsers = parser.add_subparsers(dest="subcommand", required=True)
+
+    parser_create = subparsers.add_parser('create', help="Create DB")
+    parser_create.add_argument("--download", "-d", help="Download data from data.gouv.fr", action='store_true', default=False)
+    parser_create.add_argument("--datadir", "-p", help="Data location", default="anfr")
+
+    parser_query = subparsers.add_parser('info', help="Query DB")
+    parser_query.add_argument("id", help="ID to query")
+    parser_query.add_argument("--type", "-t", help="site | support | station | antenna | transmitter", default="site")
 
     args = parser.parse_args()
-    if args.download:
-        download_data(args.datadir)
-    if args.importdb is not None:
+
+    if args.subcommand=='create':
+        if args.download:
+            download_data(args.datadir)
+    #if args.importdb is not None:
         #import_cities(args.dbfile, dirpath=mydir)
-        import_anfr_zip(args.importdb, dirpath=args.datadir)
+        import_anfr_zip(args.dbfile, dirpath=args.datadir)
+    elif args.subcommand=='info':
+        res = query(args.dbfile, args.id, args.type)
+        print(res)
+    elif args.subcommand=='web':
+        res = query(args.dbfile, args.id, args.type)
+        print(res)

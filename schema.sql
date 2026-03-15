@@ -41,6 +41,7 @@ INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('id_antenn
 INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('id_operators', 'attributes', 'id_operators');
 INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('id_support_owners', 'attributes', 'id_support_owners');
 INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('id_support_types', 'attributes', 'id_support_types');
+-- INSERT INTO gpkg_contents (table_name, data_type, identifier, description, srs_id) VALUES ('v_sites', 'features', 'v_sites', 'Radio tower view', 4326);
 
 -- Geometry columns table
 CREATE TABLE gpkg_geometry_columns (
@@ -56,7 +57,22 @@ CREATE TABLE gpkg_geometry_columns (
     CONSTRAINT fk_gc_srs FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys (srs_id)
 );
 INSERT INTO gpkg_geometry_columns (table_name, column_name, geometry_type_name, srs_id, z, m) VALUES ('sites', 'geom', 'POINT', 4326, 0, 0);
+-- INSERT INTO gpkg_geometry_columns (table_name, column_name, geometry_type_name, srs_id, z, m) VALUES ('v_sites', 'geom', 'POINT', 4326, 0, 0);
 
+CREATE TABLE gpkg_ogr_contents (
+    table_name TEXT NOT NULL PRIMARY KEY,
+    feature_count INTEGER DEFAULT NULL
+);
+INSERT INTO gpkg_ogr_contents VALUES ('sites', NULL);
+
+CREATE TABLE gpkg_extensions (
+    table_name TEXT,
+    column_name TEXT,
+    extension_name TEXT NOT NULL,
+    definition TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    CONSTRAINT ge_tce UNIQUE (table_name, column_name, extension_name)
+);
 
 CREATE TABLE sample_feature_table (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,6 +182,8 @@ update sites set address=addgroup from -- Unfortunately sqlite does not support 
         (select distinct dms, address from tmp_supports)
     group by dms) foo -- having count(dms)>1
 where sites.dms=foo.dms;
+create index sites_lon_idx on sites(lon);
+create index sites_lat_idx on sites(lat);
 
 create table supports (
     id integer primary key,
@@ -240,13 +258,15 @@ insert into transmitters select sup_emetteur.EMR_ID, stations.id, AER_ID, id_sys
     from sup_emetteur inner join id_systems on sup_emetteur.EMR_LB_SYSTEME=id_systems.system
     inner join stations on sup_emetteur.STA_NM_ANFR=stations.station_name
     inner join tmp_bands5 on tmp_bands5.emr_id=sup_emetteur.emr_id;
+create index transmitters_antenna_idx on transmitters(antenna_id);
+create index transmitters_station_idx on transmitters(station_id);
 
 select pyprint('Adding views');
 -- Add a couple of views for convenience
 create view v_bandgroups as select id, count(fmin_kHz) band_count, group_concat(fmin_kHz||'-'||fmax_kHz) bandstr, sum(fmax_kHz-fmin_kHz) BWtot from bandgroups group by id;
 
 create view v_sites as
-    select sites.id, sites.dms, lon, lat, inseecode,
+    select sites.id, sites.dms, lon, lat, inseecode, geom,
     count(distinct operator) operator_count, cast(group_concat(distinct operator) as text) operator_list,
     count(distinct supports.id) support_count, group_concat(distinct supports.id) support_list, max(sup_height) h_max,
     count(distinct station_id) sta_count, cast(group_concat(distinct station_id) as text) sta_list,
