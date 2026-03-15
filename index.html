@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Radio Sites</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  font-family: Arial, sans-serif;
+  overflow: hidden;
+}
+
+#header {
+  height: 56px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  color: white;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+  position: relative;
+  z-index: 1000;
+}
+
+#header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+#header h1 span { color: #e94560; }
+
+#colormap-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #aac;
+}
+
+#colormap-group label { white-space: nowrap; }
+
+#colormap-select {
+  background: rgba(255,255,255,0.1);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+}
+#colormap-select:focus { border-color: #e94560; }
+#colormap-select option { background: #16213e; color: white; }
+
+#colormap-bar {
+  width: 120px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(255,255,255,0.2);
+  flex-shrink: 0;
+}
+
+/* ── Layout ── */
+#main {
+  display: flex;
+  height: calc(100% - 56px);
+}
+
+#map {
+  flex: 1;
+  min-width: 0;
+  transition: flex 0.3s ease;
+}
+
+/* ── Sidebar ── */
+#sidebar {
+  width: 0;
+  overflow: hidden;
+  transition: width 0.3s ease;
+  background: #fff;
+  border-left: 1px solid #dde;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 16px rgba(0,0,0,0.12);
+  position: relative;
+  z-index: 500;
+}
+
+#sidebar.open {
+  width: 340px;
+}
+
+#sidebar-header {
+  background: linear-gradient(135deg, #1a1a2e, #0f3460);
+  color: white;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+#sidebar-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+#sidebar-close {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.7);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  transition: color 0.15s;
+}
+#sidebar-close:hover { color: #e94560; }
+
+#sidebar-body {
+  flex: 1;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.sb-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid #eef;
+}
+
+.sb-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.sb-props .pk { color: #0f3460; font-weight: bold; }
+.sb-props .pv { color: #333; }
+.sb-props div { line-height: 1.8; }
+
+.sb-loading { color: #999; font-style: italic; }
+.sb-error   { color: #c0392b; }
+
+/* ── Treeview ── */
+.treeview { line-height: 1.7; }
+.treeview ul { list-style: none; margin: 0; padding-left: 14px; }
+.treeview > ul { padding-left: 0; }
+.tv-key {
+  color: #0f3460;
+  font-weight: bold;
+  cursor: pointer;
+  user-select: none;
+}
+.tv-key::before { content: "\25B6\00A0"; font-size: 9px; color: #e94560; }
+.tv-key.open::before { content: "\25BC\00A0"; }
+.tv-val { color: #333; }
+.tv-children { display: none; }
+.tv-children.open { display: block; }
+
+/* ── Selected point marker ── */
+@keyframes pulse {
+  0%   { transform: translate(-50%,-50%) scale(1);   opacity: 1; }
+  100% { transform: translate(-50%,-50%) scale(2.8); opacity: 0; }
+}
+
+.selected-marker {
+  position: relative;
+  width: 14px;
+  height: 14px;
+}
+.selected-marker .core {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e94560;
+  border: 2px solid white;
+  box-shadow: 0 0 6px rgba(233,69,96,0.7);
+}
+.selected-marker .ring {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #e94560;
+  animation: pulse 1.4s ease-out infinite;
+}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>📡 Radio <span>Sites</span></h1>
+  <div id="colormap-group" style="display:none">
+    <label for="colormap-select">Color by</label>
+    <select id="colormap-select"></select>
+    <canvas id="colormap-bar" width="120" height="14"></canvas>
+  </div>
+</div>
+
+<div id="main">
+  <div id="map"></div>
+
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <span id="sidebar-title">Site</span>
+      <button id="sidebar-close" title="Close">✕</button>
+    </div>
+    <div id="sidebar-body"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/flatgeobuf@3.25.0/dist/flatgeobuf-geojson.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet.glify@3.3.1/dist/glify-browser.js"></script>
+
+<script>
+const map = L.map('map').setView([46.5, 2.5], 6);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap'
+}).addTo(map);
+
+// ── Colormap ──────────────────────────────────────────────────────────────────
+const COLORMAP = [
+  [0,   0,   0.6],
+  [0,   0.5, 1  ],
+  [0,   1,   0.5],
+  [0.8, 1,   0  ],
+  [1,   0.4, 0  ],
+  [0.8, 0,   0  ],
+];
+
+function colormapColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const n = COLORMAP.length - 1;
+  const lo = Math.floor(t * n);
+  const hi = Math.min(lo + 1, n);
+  const f = t * n - lo;
+  const a = COLORMAP[lo], b = COLORMAP[hi];
+  return {
+    r: a[0] + (b[0] - a[0]) * f,
+    g: a[1] + (b[1] - a[1]) * f,
+    b: a[2] + (b[2] - a[2]) * f,
+    a: 0.85
+  };
+}
+
+function drawColormapBar(canvasEl) {
+  const ctx = canvasEl.getContext('2d');
+  const w = canvasEl.width, h = canvasEl.height;
+  for (let x = 0; x < w; x++) {
+    const c = colormapColor(x / (w - 1));
+    ctx.fillStyle = `rgb(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)})`;
+    ctx.fillRect(x, 0, 1, h);
+  }
+}
+drawColormapBar(document.getElementById('colormap-bar'));
+
+// ── Treeview builder ──────────────────────────────────────────────────────────
+function buildTreeview(data) {
+  function labelForKey(key) {
+    if (key === 'antennas') return 'antenna';
+    if (key === 'transmitters') return 'transmitter';
+    return 'support';
+  }
+  function renderArray(arr, itemLabel) {
+    return arr.map((item, i) => {
+      if (item !== null && typeof item === 'object') {
+        return `<li><span class="tv-key">${itemLabel} ${i}</span><ul class="tv-children">${renderObj(item)}</ul></li>`;
+      }
+      return `<li><span class="tv-val">${String(item)}</span></li>`;
+    }).join('');
+  }
+  function renderObj(obj) {
+    return Object.entries(obj).map(([k, v]) => {
+      if (v !== null && typeof v === 'object') {
+        if (Array.isArray(v)) {
+          const label = labelForKey(k);
+          if (label !== 'support') {
+            return renderArray(v, label);
+          }
+          return `<li><span class="tv-key">${k}</span><ul class="tv-children">${renderArray(v, label)}</ul></li>`;
+        }
+        return `<li><span class="tv-key">${k}</span><ul class="tv-children">${renderObj(v)}</ul></li>`;
+      }
+      return `<li><span class="pk">${k}:</span> <span class="tv-val">${v === null ? 'null' : String(v)}</span></li>`;
+    }).join('');
+  }
+  const inner = Array.isArray(data) ? renderArray(data, 'support') : renderObj(data);
+  return `<div class="treeview"><ul>${inner}</ul></div>`;
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const PRECISION = 0.0005;
+const MIN_VAL = 0, MAX_VAL = 140;
+
+let features = [];
+let currentProp = null;
+let glifyLayer = null;
+let selectedMarker = null;
+
+function getColor(index) {
+  if (!currentProp) return { r: 0.15, g: 0.5, b: 1, a: 0.85 };
+  const val = features[index]?.properties[currentProp];
+  if (typeof val !== 'number') return { r: 0.55, g: 0.55, b: 0.55, a: 0.8 };
+  return colormapColor((val - MIN_VAL) / (MAX_VAL - MIN_VAL));
+}
+
+function buildGlifyLayer() {
+  if (glifyLayer) glifyLayer.remove();
+  glifyLayer = L.glify.points({
+    map,
+    data: features.map(f => [f.geometry.coordinates[0], f.geometry.coordinates[1]]),
+    size: (i) => 7+features[i]?.properties?.ant_count/4,
+    color: getColor
+  });
+}
+
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+const sidebar    = document.getElementById('sidebar');
+const sbTitle    = document.getElementById('sidebar-title');
+const sbBody     = document.getElementById('sidebar-body');
+const sbClose    = document.getElementById('sidebar-close');
+
+function openSidebar(siteId) {
+  sbTitle.textContent = `📡 Site ${siteId}`;
+  sidebar.classList.add('open');
+  // Notify Leaflet the map container size changed
+  setTimeout(() => map.invalidateSize(), 310);
+}
+
+function closeSidebar() {
+  sidebar.classList.remove('open');
+  if (selectedMarker) { selectedMarker.remove(); selectedMarker = null; }
+  setTimeout(() => map.invalidateSize(), 310);
+}
+
+sbClose.addEventListener('click', closeSidebar);
+
+// ── Selected point marker ─────────────────────────────────────────────────────
+const selectedIcon = L.divIcon({
+  className: '',
+  html: '<div class="selected-marker"><div class="ring"></div><div class="core"></div></div>',
+  iconSize: [14, 14],
+  iconAnchor: [7, 7]
+});
+
+// ── Load data ─────────────────────────────────────────────────────────────────
+async function loadPoints() {
+  const resp = await fetch('anfr.fgb');
+  for await (const feature of flatgeobuf.deserialize(resp.body)) {
+    if (feature.geometry.type !== 'Point') continue;
+    const [lng, lat] = feature.geometry.coordinates;
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lat, lng] },
+      properties: feature.properties
+    });
+  }
+  console.log('points loaded:', features.length);
+
+  if (features.length) {
+    const countProps = Object.keys(features[0].properties).filter(k => k.endsWith('_count'));
+    if (countProps.length) {
+      const sel = document.getElementById('colormap-select');
+      const noneOpt = document.createElement('option');
+      noneOpt.value = ''; noneOpt.textContent = '(none)';
+      sel.appendChild(noneOpt);
+      countProps.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p; opt.textContent = p;
+        sel.appendChild(opt);
+      });
+      document.getElementById('colormap-group').style.display = 'flex';
+      sel.addEventListener('change', () => {
+        currentProp = sel.value || null;
+        buildGlifyLayer();
+      });
+    }
+  }
+
+  buildGlifyLayer();
+}
+
+loadPoints();
+
+// ── Click handler ─────────────────────────────────────────────────────────────
+map.on('click', function(e) {
+  const { lat, lng } = e.latlng;
+  const feature = features.find(f =>
+    Math.abs(f.geometry.coordinates[0] - lat) < PRECISION &&
+    Math.abs(f.geometry.coordinates[1] - lng) < PRECISION
+  );
+  if (!feature) return;
+
+  const props = feature.properties;
+  const siteId = props.site_id;
+  const latlng = [feature.geometry.coordinates[0], feature.geometry.coordinates[1]];
+
+  // Place selected marker
+  if (selectedMarker) selectedMarker.remove();
+  selectedMarker = L.marker(latlng, { icon: selectedIcon, zIndexOffset: 1000 }).addTo(map);
+
+  // Build properties section
+  let propsHTML = '';
+  for (const [k, v] of Object.entries(props)) {
+    propsHTML += `<div><span class="pk">${k}:</span> <span class="pv">${v}</span></div>`;
+  }
+
+  sbBody.innerHTML = `
+    <div class="sb-section sb-props">
+      <div class="sb-section-title">Properties</div>
+      ${propsHTML}
+    </div>
+    <div class="sb-section" id="sb-ajax">
+      <div class="sb-section-title">Site data</div>
+      <span class="sb-loading">Loading…</span>
+    </div>`;
+
+  openSidebar(siteId);
+
+  fetch(`https://radiomap.karteum.ovh/site/${siteId}`)
+    .then(r => r.json())
+    .then(data => {
+      const ajaxDiv = document.getElementById('sb-ajax');
+      if (!ajaxDiv) return;
+      ajaxDiv.innerHTML = `<div class="sb-section-title">Site data</div>${buildTreeview(data)}`;
+      ajaxDiv.addEventListener('click', ev => {
+        const el = ev.target.closest('.tv-key');
+        if (!el) return;
+        el.classList.toggle('open');
+        el.nextElementSibling.classList.toggle('open');
+      });
+    })
+    .catch(err => {
+      const ajaxDiv = document.getElementById('sb-ajax');
+      if (ajaxDiv) ajaxDiv.innerHTML = `<div class="sb-section-title">Site data</div><span class="sb-error">Error: ${err.message}</span>`;
+    });
+});
+
+// Cursor pointer on hover
+map.on('mousemove', function(e) {
+  const { lat, lng } = e.latlng;
+  const over = features.some(f =>
+    Math.abs(f.geometry.coordinates[0] - lat) < PRECISION &&
+    Math.abs(f.geometry.coordinates[1] - lng) < PRECISION
+  );
+  map.getContainer().style.cursor = over ? 'pointer' : '';
+});
+</script>
+</body>
+</html>
