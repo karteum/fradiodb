@@ -178,15 +178,26 @@ def query(dbfilename, itemid, itemtype="site"):
     conn = sqlite3.connect(dbfilename)
     conn.row_factory = dict_factory
     if itemtype=="site":
-        return json.dumps(query_site(conn, itemid))
+        SYSLIST = get_syslist(dbfilename) # FIXME: cache this result
+        return json.dumps(query_site(conn, itemid, SYSLIST))
     elif itemtype=='support':
         return json.dumps(query_antennas(conn, itemid))
     elif itemtype=='antenna':
         return json.dumps(query_transmitters(conn, itemid))
 
-def query_site(conn, site_id):
+def query_site(conn, site_id, syslist):
     cur  = conn.cursor()
-    res = cur.execute("""select dms, lon, lat, address, postcode, inseecode from sites where sites.id=?""", (site_id,)).fetchall()[0]
+    res = cur.execute("""select dms, lon, lat, address, postcode, inseecode, tech_bitmask1, tech_bitmask2 from sites where sites.id=?""", (site_id,)).fetchall()[0]
+    # res['stations'] = cur.execute("""
+    #     select cast(group_concat(distinct station_id) as text) sta_list,
+    #     from sites
+    #     inner join antennas on antennas.sup_id=supports.id
+    #     inner join supports on sites.id=supports.site_id
+    #     inner join transmitters on transmitters.antenna_id=antennas.id
+    #     inner join stations on stations.id=transmitters.station_id where sites.id=?
+    #     group by sites.id""", (site_id,)).fetchall()[0]
+    res['tech_list'] = list_from_mask(masks64_to_mask128(res['tech_bitmask1'],res['tech_bitmask2']),syslist)
+    del res['tech_bitmask1'],res['tech_bitmask2']
     res['supports'] = query_supports(conn, site_id)
     return res
 
@@ -285,8 +296,8 @@ def gen_minmax_json(dbfilename="anfr2026.gpkg", jsonfile="minmax.json"):
     res = cur.execute(query).fetchall()[0]
     metrics = {
         "h":  [res['h_min'], res['h_max']],
-        "support_count": [res['sup_c_min'], res['sup_c_max']],
-        "operator_count": [res['op_c_min'], res['op_c_max']],
+        #"support_count": [res['sup_c_min'], res['sup_c_max']],
+        #"operator_count": [res['op_c_min'], res['op_c_max']],
         "sta_count": [res['sta_c_min'], res['sta_c_max']],
         "ant_count": [res['ant_c_min'], res['ant_c_max']],
     }

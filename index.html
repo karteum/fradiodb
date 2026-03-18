@@ -334,12 +334,21 @@ function getColor(index) {
   return colormapColor((val - minVal) / (maxVal - minVal));
 }
 
+function getSize(index) {
+  if (!currentProp) return 7;
+  const val = features[index]?.properties[currentProp];
+  if (typeof val !== 'number') return 7;
+  const [minVal, maxVal] = getMinMax(currentProp);
+  const t = Math.max(0, Math.min(1, (val - minVal) / (maxVal - minVal)));
+  return 7 + t * (40 - 7);
+}
+
 function buildGlifyLayer() {
   if (glifyLayer) glifyLayer.remove();
   glifyLayer = L.glify.points({
     map,
     data: features.map(f => [f.geometry.coordinates[0], f.geometry.coordinates[1]]),
-    size: (i) => 7+features[i]?.properties?.ant_count/4,
+    size: getSize,
     color: getColor
   });
 }
