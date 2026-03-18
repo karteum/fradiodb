@@ -171,6 +171,131 @@ html, body {
 .tv-children { display: none; }
 .tv-children.open { display: block; }
 
+/* ── Filter Panel ── */
+#filter-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  overflow: hidden;
+  transition: width 0.3s ease;
+  background: #fff;
+  border-right: 1px solid #dde;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 4px 0 16px rgba(0,0,0,0.12);
+  z-index: 500;
+}
+
+#filter-panel.open { width: 260px; }
+
+#filter-panel-header {
+  background: linear-gradient(135deg, #1a1a2e, #0f3460);
+  color: white;
+  padding: 12px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+#filter-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+}
+
+.filter-row { margin-bottom: 18px; }
+
+.filter-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.filter-prop-name { color: #0f3460; font-weight: bold; }
+.filter-val { color: #888; font-size: 11px; }
+
+.filter-slider {
+  width: 100%;
+  accent-color: #e94560;
+  cursor: pointer;
+}
+
+.filter-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #888;
+  margin: 16px 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid #eef;
+}
+
+.filter-bitmasks {
+  font-size: 11px;
+  color: #555;
+  font-family: monospace;
+  margin-bottom: 8px;
+  line-height: 1.7;
+}
+
+.filter-tech-controls {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.filter-tech-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid #ccd;
+  border-radius: 3px;
+  background: #f5f5fa;
+  cursor: pointer;
+  color: #0f3460;
+}
+.filter-tech-btn:hover { background: #e8e8f5; }
+
+.filter-tech-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid #eef;
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.tech-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.tech-row:hover { background: #f0f0fa; }
+.tech-row label { font-size: 12px; color: #333; cursor: pointer; user-select: none; }
+.tech-row input[type="checkbox"] { accent-color: #e94560; cursor: pointer; flex-shrink: 0; }
+
+#filter-toggle {
+  background: rgba(255,255,255,0.1);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+#filter-toggle:hover { background: rgba(255,255,255,0.2); }
+#filter-toggle.active { background: #e94560; border-color: #e94560; }
+
 /* ── Selected point marker ── */
 @keyframes pulse {
   0%   { transform: translate(-50%,-50%) scale(1);   opacity: 1; }
@@ -213,6 +338,7 @@ html, body {
     <select id="colormap-select"></select>
     <canvas id="colormap-bar" width="120" height="14"></canvas>
   </div>
+  <button id="filter-toggle" title="Toggle filters">Filters</button>
   <a href="https://github.com/karteum/fradiodb" target="_blank" rel="noopener" style="margin-left:auto;color:rgba(255,255,255,0.75);line-height:1;text-decoration:none;display:flex;align-items:center;" title="GitHub">
     <svg width="24" height="24" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
   </a>
@@ -220,6 +346,11 @@ html, body {
 
 <div id="main">
   <div id="map"></div>
+
+  <div id="filter-panel">
+    <div id="filter-panel-header">Filters</div>
+    <div id="filter-panel-body"></div>
+  </div>
 
   <div id="sidebar">
     <div id="sidebar-header">
@@ -235,6 +366,7 @@ html, body {
 
 <script>
 const map = L.map('map').setView([46.5, 2.5], 6);
+map.zoomControl.setPosition('bottomright');
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap'
@@ -316,38 +448,80 @@ function getPrecision() {
   return 10 * 360 / (256 * Math.pow(2, map.getZoom()));
 }
 
+const METRO_BBOX = { latMin: 42, latMax: 52, lonMin: -5, lonMax: 9 };
+
 let features = [];
 let currentProp = null;
 let glifyLayer = null;
 let selectedMarker = null;
-let minMaxValues = {}; // populated from minmax.json
+let minMaxValues = {};   // populated from meta.json
+let minMaxMetro = null;  // populated from meta.minmax_metro if present
+let minMaxOverseas = null; // populated from meta.minmax_overseas if present
+let filters = {};        // { prop: minThreshold } — sites below threshold are hidden
+let activeFeatures = []; // subset of features passing current filters
+let syslist = [];        // technology names from meta.json
+const TECH_MAX_BIT = 53n;
+let selected_bitmask1 = 0n; // BigInt: selected techs at syslist indices 0–52
+let selected_bitmask2 = 0n; // BigInt: selected techs at syslist indices 53+
 
-function getMinMax(prop) {
+function isMetro(feature) {
+  const [lat, lng] = feature.geometry.coordinates;
+  return lng >= METRO_BBOX.lonMin && lng <= METRO_BBOX.lonMax &&
+         lat >= METRO_BBOX.latMin && lat <= METRO_BBOX.latMax;
+}
+
+function getMinMax(prop, feature) {
+  if (minMaxMetro && minMaxOverseas && feature) {
+    const mm = isMetro(feature) ? minMaxMetro : minMaxOverseas;
+    if (mm[prop]) return mm[prop];
+  }
   return minMaxValues[prop] || [0, 140];
 }
 
+function isFiltered(feature) {
+  for (const [prop, threshold] of Object.entries(filters)) {
+    const val = feature?.properties[prop];
+    if (typeof val !== 'number' || val < threshold) return true;
+  }
+  if (syslist.length) {
+    const b1 = BigInt(feature.properties.tech_bitmask1 ?? 0);
+    const b2 = BigInt(feature.properties.tech_bitmask2 ?? 0);
+    if ((b1 & selected_bitmask1) === 0n && (b2 & selected_bitmask2) === 0n) return true;
+  }
+  return false;
+}
+
+function scaledSqrt(val, minVal, maxVal) {
+  const scaled = (val - minVal) / (maxVal - minVal) * 100;
+  //return Math.sqrt(Math.max(0, scaled)) / Math.sqrt(100);
+  return Math.max(0, scaled) / 100;
+}
+
 function getColor(index) {
+  const feature = activeFeatures[index];
   if (!currentProp) return { r: 0.15, g: 0.5, b: 1, a: 0.85 };
-  const val = features[index]?.properties[currentProp];
+  const val = feature?.properties[currentProp];
   if (typeof val !== 'number') return { r: 0.55, g: 0.55, b: 0.55, a: 0.8 };
-  const [minVal, maxVal] = getMinMax(currentProp);
-  return colormapColor((val - minVal) / (maxVal - minVal));
+  const [minVal, maxVal] = getMinMax(currentProp, feature);
+  return colormapColor(scaledSqrt(val, minVal, maxVal));
 }
 
 function getSize(index) {
+  const feature = activeFeatures[index];
   if (!currentProp) return 7;
-  const val = features[index]?.properties[currentProp];
+  const val = feature?.properties[currentProp];
   if (typeof val !== 'number') return 7;
-  const [minVal, maxVal] = getMinMax(currentProp);
-  const t = Math.max(0, Math.min(1, (val - minVal) / (maxVal - minVal)));
+  const [minVal, maxVal] = getMinMax(currentProp, feature);
+  const t = Math.min(1, scaledSqrt(val, minVal, maxVal));
   return 7 + t * (40 - 7);
 }
 
 function buildGlifyLayer() {
+  activeFeatures = features.filter(f => !isFiltered(f));
   if (glifyLayer) glifyLayer.remove();
   glifyLayer = L.glify.points({
     map,
-    data: features.map(f => [f.geometry.coordinates[0], f.geometry.coordinates[1]]),
+    data: activeFeatures.map(f => [f.geometry.coordinates[0], f.geometry.coordinates[1]]),
     size: getSize,
     color: getColor
   });
@@ -382,15 +556,154 @@ const selectedIcon = L.divIcon({
 // ── Load data ─────────────────────────────────────────────────────────────────
 async function loadMinMax() {
   try {
-    const resp = await fetch('minmax.json');
+    const resp = await fetch('meta.json');
     if (!resp.ok) throw new Error(resp.statusText);
-    minMaxValues = await resp.json();
+    const meta = await resp.json();
+    minMaxValues = meta.minmax;
+    if (meta.syslist) syslist = meta.syslist;
+    if (meta.minmax_metro && meta.minmax_overseas) {
+      minMaxMetro = meta.minmax_metro;
+      minMaxOverseas = meta.minmax_overseas;
+    }
     return true;
   } catch (e) {
-    console.warn('Could not load minmax.json:', e.message);
+    console.warn('Could not load meta.json:', e.message);
     return false;
   }
 }
+
+function computeSelectedBitmasks(checkboxEls) {
+  let mask = 0n;
+  checkboxEls.forEach((cb, i) => {
+    if (cb.checked) mask |= (1n << BigInt(i));
+  });
+  selected_bitmask1 = mask & ((1n << TECH_MAX_BIT) - 1n);
+  selected_bitmask2 = mask >> TECH_MAX_BIT;
+  const el1 = document.getElementById('bitmask1-display');
+  const el2 = document.getElementById('bitmask2-display');
+  if (el1) el1.textContent = selected_bitmask1.toString();
+  if (el2) el2.textContent = selected_bitmask2.toString();
+}
+
+function buildFilterPanel() {
+  const body = document.getElementById('filter-panel-body');
+  const props = Object.keys(minMaxValues);
+  if (!props.length) return;
+  body.innerHTML = '';
+  props.forEach(prop => {
+    const [minVal, maxVal] = minMaxValues[prop];
+    const row = document.createElement('div');
+    row.className = 'filter-row';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'filter-label';
+    const valSpan = document.createElement('span');
+    valSpan.className = 'filter-val';
+    valSpan.textContent = '(off)';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'filter-prop-name';
+    nameSpan.textContent = prop;
+    labelEl.appendChild(nameSpan);
+    labelEl.appendChild(valSpan);
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.className = 'filter-slider';
+    slider.min = minVal;
+    slider.max = maxVal;
+    slider.value = minVal;
+    slider.step = Math.max(1, (maxVal - minVal) / 200);
+    slider.addEventListener('input', () => {
+      const v = parseFloat(slider.value);
+      if (v <= minVal) {
+        delete filters[prop];
+        valSpan.textContent = '(off)';
+      } else {
+        filters[prop] = v;
+        valSpan.textContent = `≥ ${v.toFixed(0)}`;
+      }
+      buildGlifyLayer();
+    });
+
+    row.appendChild(labelEl);
+    row.appendChild(slider);
+    body.appendChild(row);
+  });
+
+  if (!syslist.length) return;
+
+  // ── Technology checkboxes ──
+  const techTitle = document.createElement('div');
+  techTitle.className = 'filter-section-title';
+  techTitle.textContent = 'Technologies';
+  body.appendChild(techTitle);
+
+  const bitmaskDiv = document.createElement('div');
+  bitmaskDiv.className = 'filter-bitmasks';
+  bitmaskDiv.innerHTML =
+    'bitmask1: <span id="bitmask1-display">0</span><br>' +
+    'bitmask2: <span id="bitmask2-display">0</span>';
+  body.appendChild(bitmaskDiv);
+
+  const controls = document.createElement('div');
+  controls.className = 'filter-tech-controls';
+  const btnAll  = document.createElement('button');
+  btnAll.className  = 'filter-tech-btn';
+  btnAll.textContent = 'All';
+  const btnNone = document.createElement('button');
+  btnNone.className = 'filter-tech-btn';
+  btnNone.textContent = 'None';
+  controls.appendChild(btnAll);
+  controls.appendChild(btnNone);
+  body.appendChild(controls);
+
+  const list = document.createElement('div');
+  list.className = 'filter-tech-list';
+  const checkboxEls = [];
+
+  syslist.forEach((tech, i) => {
+    const row = document.createElement('div');
+    row.className = 'tech-row';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = `tech-cb-${i}`;
+    cb.checked = true;
+    const lbl = document.createElement('label');
+    lbl.htmlFor = `tech-cb-${i}`;
+    lbl.textContent = tech;
+    cb.addEventListener('change', () => {
+      computeSelectedBitmasks(checkboxEls);
+      buildGlifyLayer();
+    });
+    row.appendChild(cb);
+    row.appendChild(lbl);
+    list.appendChild(row);
+    checkboxEls.push(cb);
+  });
+
+  btnAll.addEventListener('click', () => {
+    checkboxEls.forEach(cb => { cb.checked = true; });
+    computeSelectedBitmasks(checkboxEls);
+    buildGlifyLayer();
+  });
+  btnNone.addEventListener('click', () => {
+    checkboxEls.forEach(cb => { cb.checked = false; });
+    computeSelectedBitmasks(checkboxEls);
+    buildGlifyLayer();
+  });
+
+  body.appendChild(list);
+
+  // Initialise bitmasks with all checked
+  computeSelectedBitmasks(checkboxEls);
+}
+
+document.getElementById('filter-toggle').addEventListener('click', () => {
+  const panel = document.getElementById('filter-panel');
+  const btn = document.getElementById('filter-toggle');
+  panel.classList.toggle('open');
+  btn.classList.toggle('active');
+});
 
 async function loadPoints(minMaxLoaded) {
   const resp = await fetch('anfr.json');
@@ -421,6 +734,7 @@ async function loadPoints(minMaxLoaded) {
       currentProp = sel.value || null;
       buildGlifyLayer();
     });
+    buildFilterPanel();
   }
 
   buildGlifyLayer();
@@ -432,7 +746,7 @@ loadMinMax().then(loadPoints);
 map.on('click', function(e) {
   const { lat, lng } = e.latlng;
   const prec = getPrecision();
-  const feature = features.find(f =>
+  const feature = activeFeatures.find(f =>
     Math.abs(f.geometry.coordinates[0] - lat) < prec &&
     Math.abs(f.geometry.coordinates[1] - lng) < prec
   );
@@ -495,7 +809,7 @@ map.on('click', function(e) {
 map.on('mousemove', function(e) {
   const { lat, lng } = e.latlng;
   const prec = getPrecision();
-  const over = features.some(f =>
+  const over = activeFeatures.some(f =>
     Math.abs(f.geometry.coordinates[0] - lat) < prec &&
     Math.abs(f.geometry.coordinates[1] - lng) < prec
   );

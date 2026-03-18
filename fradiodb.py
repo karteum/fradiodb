@@ -257,6 +257,8 @@ class fradiodb_web_handler(BaseHTTPRequestHandler):
             return self.staticfile("text/html")
         if self.path == "/minmax.json":
             return self.staticfile("application/json")
+        if self.path == "/meta.json":
+            return self.staticfile("application/json")
         if self.path == "/anfr.json":
             return self.staticfile("application/geo+json")
         if self.path == "/anfr.fgb":
@@ -276,10 +278,27 @@ class fradiodb_web_handler(BaseHTTPRequestHandler):
         # Otherwise 404
         self.send_error(404)
 
-def gen_minmax_json(dbfilename="anfr2026.gpkg", jsonfile="minmax.json"):
+
+def gen_meta_json(dbfilename="anfr2026.gpkg", jsonfile="meta.json"):
+    metrics = {
+        "minmax": gen_minmax_json(dbfilename="anfr2026.gpkg"),
+        "minmax_metro": gen_minmax_json(dbfilename="anfr2026.gpkg", where='metro'),
+        "minmax_overseas": gen_minmax_json(dbfilename="anfr2026.gpkg", where='overseas'),
+        "syslist" : get_syslist(dbfilename)
+    }
+    with open(jsonfile, "w") as f:
+        json.dump(metrics, f)
+
+def gen_minmax_json(dbfilename="anfr2026.gpkg", where=None):
+    latmax, lonmax, latmin, lonmin = (52, 9, 42, -5) # Bounding box France métropolitaine
+    wheremetro = f"where lon>={lonmin} and lon<={lonmax} and lat>={latmin} and lat<={latmax}"
+    whereoverseas = f"where lon<{lonmin} or lon>{lonmax} or lat<{latmin} or lat>{latmax}"
+    wherecond=""
+    if where != None:
+        wherecond = whereoverseas if where=="overseas" else wheremetro
     conn = sqlite3.connect(dbfilename)
     conn.row_factory = dict_factory
-    query = """select min(support_count) sup_c_min, max(support_count) sup_c_max, min(h) h_min, max(h) h_max,
+    query = f"""select min(support_count) sup_c_min, max(support_count) sup_c_max, min(h) h_min, max(h) h_max,
                min(operator_count) op_c_min, max(operator_count) op_c_max, min(sta_count) sta_c_min, max(sta_count) sta_c_max,
                min(ant_count) ant_c_min, max(ant_count) ant_c_max
                    from (select count(distinct supports.id) support_count, max(sup_height) h, count(distinct operator) operator_count,
@@ -291,6 +310,7 @@ def gen_minmax_json(dbfilename="anfr2026.gpkg", jsonfile="minmax.json"):
                     inner join id_systems on transmitters.system_id=id_systems.id
                     inner join stations on stations.id=transmitters.station_id
                     inner join id_operators on id_operators.id=stations.operator_id
+                    {wherecond}
                     group by sites.id)"""
     cur = conn.cursor()
     res = cur.execute(query).fetchall()[0]
@@ -301,8 +321,7 @@ def gen_minmax_json(dbfilename="anfr2026.gpkg", jsonfile="minmax.json"):
         "sta_count": [res['sta_c_min'], res['sta_c_max']],
         "ant_count": [res['ant_c_min'], res['ant_c_max']],
     }
-    with open(jsonfile, "w") as f:
-        json.dump(metrics, f)
+    return metrics
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
