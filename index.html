@@ -480,6 +480,7 @@ let minMaxMetro = null;  // populated from meta.minmax_metro if present
 let minMaxOverseas = null; // populated from meta.minmax_overseas if present
 let filters = {};        // { prop: minThreshold } — sites below threshold are hidden
 let activeFeatures = []; // subset of features passing current filters
+let displayToActive = []; // maps glify point index → activeFeatures index (duplicates share same entry)
 let syslist = [];        // technology names from meta.json
 const TECH_MAX_BIT = 53n;
 let selected_bitmask1 = 0n; // BigInt: selected techs at syslist indices 0–52
@@ -519,7 +520,7 @@ function scaledSqrt(val, minVal, maxVal) {
 }
 
 function getColor(index) {
-  const feature = activeFeatures[index];
+  const feature = activeFeatures[displayToActive[index]];
   if (!currentProp) return { r: 0.15, g: 0.5, b: 1, a: 0.85 };
   const val = feature?.properties[currentProp];
   if (typeof val !== 'number') return { r: 0.55, g: 0.55, b: 0.55, a: 0.8 };
@@ -528,7 +529,7 @@ function getColor(index) {
 }
 
 function getSize(index) {
-  const feature = activeFeatures[index];
+  const feature = activeFeatures[displayToActive[index]];
   if (!currentProp) return 7;
   const val = feature?.properties[currentProp];
   if (typeof val !== 'number') return 7;
@@ -539,10 +540,21 @@ function getSize(index) {
 
 function buildGlifyLayer() {
   activeFeatures = features.filter(f => !isFiltered(f));
+  const displayCoords = [];
+  displayToActive = [];
+  activeFeatures.forEach((f, i) => {
+    const [lat, lng] = f.geometry.coordinates;
+    displayCoords.push([lat, lng]);
+    displayToActive.push(i);
+    if (Math.abs(lng) > 90) {
+      displayCoords.push([lat, lng + (lng > 0 ? -360 : 360)]);
+      displayToActive.push(i);
+    }
+  });
   if (glifyLayer) glifyLayer.remove();
   glifyLayer = L.glify.points({
     map,
-    data: activeFeatures.map(f => [f.geometry.coordinates[0], f.geometry.coordinates[1]]),
+    data: displayCoords,
     size: getSize,
     color: getColor
   });
@@ -763,19 +775,31 @@ async function loadPoints(minMaxLoaded) {
 
 loadMinMax().then(loadPoints);
 
+// ── Hit-test helper (checks original lng and antimeridian duplicate) ───────────
+function findFeatureAt(lat, lng, prec) {
+  for (const f of activeFeatures) {
+    if (Math.abs(f.geometry.coordinates[0] - lat) >= prec) continue;
+    const origLng = f.geometry.coordinates[1];
+    if (Math.abs(origLng - lng) < prec) return { feature: f, markerLng: origLng };
+    if (Math.abs(origLng) > 90) {
+      const dupLng = origLng + (origLng > 0 ? -360 : 360);
+      if (Math.abs(dupLng - lng) < prec) return { feature: f, markerLng: dupLng };
+    }
+  }
+  return null;
+}
+
 // ── Click handler ─────────────────────────────────────────────────────────────
 map.on('click', function(e) {
   const { lat, lng } = e.latlng;
   const prec = getPrecision();
-  const feature = activeFeatures.find(f =>
-    Math.abs(f.geometry.coordinates[0] - lat) < prec &&
-    Math.abs(f.geometry.coordinates[1] - lng) < prec
-  );
-  if (!feature) return;
+  const hit = findFeatureAt(lat, lng, prec);
+  if (!hit) return;
 
+  const { feature, markerLng } = hit;
   const props = feature.properties;
   const siteId = props.site_id;
-  const latlng = [feature.geometry.coordinates[0], feature.geometry.coordinates[1]];
+  const latlng = [feature.geometry.coordinates[0], markerLng];
 
   // Place selected marker
   if (selectedMarker) selectedMarker.remove();
@@ -830,10 +854,7 @@ map.on('click', function(e) {
 map.on('mousemove', function(e) {
   const { lat, lng } = e.latlng;
   const prec = getPrecision();
-  const over = activeFeatures.some(f =>
-    Math.abs(f.geometry.coordinates[0] - lat) < prec &&
-    Math.abs(f.geometry.coordinates[1] - lng) < prec
-  );
+  const over = !!findFeatureAt(lat, lng, prec);
   map.getContainer().style.cursor = over ? 'pointer' : '';
 });
 </script>

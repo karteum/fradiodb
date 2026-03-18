@@ -204,8 +204,8 @@ def query_site(conn, site_id, syslist):
 def query_supports(conn, site_id):
     cur  = conn.cursor()
     res_supports = cur.execute("""select supports.id support_id, support_type, support_owner, sup_height support_height from supports
-                                         inner join id_support_owners on id_support_owners.id=owner_id
                                          inner join id_support_types on id_support_types.id=suptype_id
+                                         left outer join id_support_owners on id_support_owners.id=owner_id
                                          where site_id=?""", (site_id,)).fetchall()
     for res in res_supports:
         res['antennas'] = query_antennas(conn, res['support_id'])
