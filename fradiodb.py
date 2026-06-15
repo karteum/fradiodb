@@ -26,8 +26,8 @@ def download_data(dirpath='anfr'):
     if not exists(dirpath):
         makedirs(dirpath)
     URLS = {
-        "anfr_stations.zip": "https://www.data.gouv.fr/fr/datasets/r/71ba9313-6610-47d7-a5b7-ffaf2fc2427b",
-        "anfr_stations_ids.zip": "https://www.data.gouv.fr/fr/datasets/r/dbf19e30-f750-4b25-9dd4-ace5e7d266bb"
+        "anfr_stations.zip": "https://www.data.gouv.fr/api/1/datasets/r/e319bdb3-20b4-4016-baec-03fe9daa653d",
+        "anfr_stations_ids.zip": "https://www.data.gouv.fr/api/1/datasets/r/426e26c0-804b-4952-8ffb-5662658ca0c1"
         #"densites.xlsx": "https://www.insee.fr/fr/statistiques/fichier/6439600/grille_densite_7_niveaux_2023.xlsx" # https://www.insee.fr/fr/information/6439600
     }
     for k,v in URLS.items():
@@ -255,13 +255,13 @@ class fradiodb_web_handler(BaseHTTPRequestHandler):
         if self.path=="/": self.path="/index.html"
         if self.path == "/index.html":
             return self.staticfile("text/html")
-        if self.path == "/minmax.json":
+        if self.path == "/minmax.json": # obsolete
             return self.staticfile("application/json")
         if self.path == "/meta.json":
             return self.staticfile("application/json")
         if self.path == "/anfr.json":
             return self.staticfile("application/geo+json")
-        if self.path == "/anfr.fgb":
+        if self.path == "/anfr.fgb": # obsolete
             return self.staticfile("application/x-flatgeobuf")
 
         # Dynamic route /site/<site_id>
@@ -278,6 +278,26 @@ class fradiodb_web_handler(BaseHTTPRequestHandler):
         # Otherwise 404
         self.send_error(404)
 
+def gen_anfr_json(dbfilename="anfr2026.gpkg", jsonfile="anfr.json"):
+    from os import system
+    query = """select sites.id, CAST(sites.id AS INTEGER)+0 as site_id, geom,
+        count(distinct supports.id) support_count, max(sup_height) h,
+        count(distinct operator) operator_count,
+        cast(group_concat(distinct operator) as text) operator_list,
+        count(distinct station_id) sta_count,count(distinct antennas.id) ant_count,
+        sites.tech_bitmask1, sites.tech_bitmask2
+        from sites
+        inner join antennas on antennas.sup_id=supports.id
+        inner join supports on sites.id=supports.site_id
+        inner join transmitters on transmitters.antenna_id=antennas.id
+        inner join id_systems on transmitters.system_id=id_systems.id
+        inner join stations on stations.id=transmitters.station_id
+        inner join id_operators on id_operators.id=stations.operator_id
+        group by sites.id"""
+    if system(f"ogr2ogr -f GeoJSON '{jsonfile}' '{dbfilename}' -sql '{query}'"):
+        print("Error: is ogr2ogr installed ?")
+    else:
+        print(f"{jsonfile} created")
 
 def gen_meta_json(dbfilename="anfr2026.gpkg", jsonfile="meta.json"):
     metrics = {
@@ -329,8 +349,10 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     parser_create = subparsers.add_parser('create', help="Create DB")
+    parser_create.add_argument("--force", "-f", help="Force recreating DB", action='store_true', default=False)
     parser_create.add_argument("--download", "-d", help="Download data from data.gouv.fr", action='store_true', default=False)
     parser_create.add_argument("--datadir", "-p", help="Data location", default="anfr")
+    parser_create.add_argument("--json", "-j", help="Create json files needed for webapp", action='store_true', default=False)
 
     parser_query = subparsers.add_parser('info', help="Query DB")
     parser_query.add_argument("id", help="ID to query")
@@ -346,7 +368,11 @@ if __name__ == "__main__":
             download_data(args.datadir)
     #if args.importdb is not None:
         #import_cities(args.dbfile, dirpath=mydir)
-        import_anfr_zip(args.dbfile, dirpath=args.datadir)
+        if args.force or not exists(args.dbfile):
+            import_anfr_zip(args.dbfile, dirpath=args.datadir)
+        if args.json:
+            gen_anfr_json(args.dbfile)
+            gen_meta_json(args.dbfile)
     elif args.subcommand=='info':
         res = query(args.dbfile, args.id, args.type)
         print(res)

@@ -360,9 +360,12 @@ html, body {
     <canvas id="colormap-bar" width="120" height="14"></canvas>
   </div>
   <button id="filter-toggle" title="Toggle filters">Filters</button>
-  <a href="https://github.com/karteum/fradiodb" target="_blank" rel="noopener" style="margin-left:auto;color:rgba(255,255,255,0.75);line-height:1;text-decoration:none;display:flex;align-items:center;" title="GitHub">
+  <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
+    <span id="loading-indicator" style="font-size:13px;color:rgba(255,255,255,0.7);letter-spacing:1px;display:none">Loading…</span>
+    <a href="https://github.com/karteum/fradiodb" target="_blank" rel="noopener" style="color:rgba(255,255,255,0.75);line-height:1;text-decoration:none;display:flex;align-items:center;" title="GitHub">
     <svg width="24" height="24" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
   </a>
+  </div>
 </div>
 
 <div id="main">
@@ -388,6 +391,7 @@ html, body {
 <script>
 const map = L.map('map').setView([46.5, 2.5], 6);
 map.zoomControl.setPosition('bottomright');
+L.control.scale({ imperial: false, position: 'bottomright' }).addTo(map);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap'
@@ -485,6 +489,7 @@ let syslist = [];        // technology names from meta.json
 const TECH_MAX_BIT = 53n;
 let selected_bitmask1 = 0n; // BigInt: selected techs at syslist indices 0–52
 let selected_bitmask2 = 0n; // BigInt: selected techs at syslist indices 53+
+let techFilterMode = 'OR';  // 'OR' or 'AND'
 
 function isMetro(feature) {
   const [lat, lng] = feature.geometry.coordinates;
@@ -508,7 +513,11 @@ function isFiltered(feature) {
   if (syslist.length) {
     const b1 = BigInt(feature.properties.tech_bitmask1 ?? 0);
     const b2 = BigInt(feature.properties.tech_bitmask2 ?? 0);
-    if ((b1 & selected_bitmask1) === 0n && (b2 & selected_bitmask2) === 0n) return true;
+    if (techFilterMode === 'OR') {
+      if ((b1 & selected_bitmask1) === 0n && (b2 & selected_bitmask2) === 0n) return true;
+    } else {
+      if (!((b1 & selected_bitmask1) === selected_bitmask1 && (b2 & selected_bitmask2) === selected_bitmask2)) return true;
+    }
   }
   return false;
 }
@@ -540,6 +549,8 @@ function getSize(index) {
 
 function buildGlifyLayer() {
   activeFeatures = features.filter(f => !isFiltered(f));
+  const countEl = document.getElementById('active-count-display');
+  if (countEl) countEl.textContent = activeFeatures.length;
   const displayCoords = [];
   displayToActive = [];
   activeFeatures.forEach((f, i) => {
@@ -614,8 +625,8 @@ function computeSelectedBitmasks(checkboxEls) {
   selected_bitmask2 = mask >> TECH_MAX_BIT;
   const el1 = document.getElementById('bitmask1-display');
   const el2 = document.getElementById('bitmask2-display');
-  if (el1) el1.textContent = selected_bitmask1.toString();
-  if (el2) el2.textContent = selected_bitmask2.toString();
+  if (el1) el1.textContent = '0x' + selected_bitmask1.toString(16);
+  if (el2) el2.textContent = '0x' + selected_bitmask2.toString(16);
 }
 
 function buildFilterPanel() {
@@ -675,7 +686,8 @@ function buildFilterPanel() {
   bitmaskDiv.className = 'filter-bitmasks';
   bitmaskDiv.innerHTML =
     'bitmask1: <span id="bitmask1-display">0</span><br>' +
-    'bitmask2: <span id="bitmask2-display">0</span>';
+    'bitmask2: <span id="bitmask2-display">0</span><br>' +
+    'count: <span id="active-count-display">0</span>';
   body.appendChild(bitmaskDiv);
 
   const controls = document.createElement('div');
@@ -686,8 +698,22 @@ function buildFilterPanel() {
   const btnNone = document.createElement('button');
   btnNone.className = 'filter-tech-btn';
   btnNone.textContent = 'None';
+  const modeSelect = document.createElement('select');
+  modeSelect.className = 'filter-tech-btn';
+  modeSelect.style.cursor = 'pointer';
+  ['OR', 'AND'].forEach(val => {
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = val;
+    modeSelect.appendChild(opt);
+  });
+  modeSelect.value = techFilterMode;
+  modeSelect.addEventListener('change', () => {
+    techFilterMode = modeSelect.value;
+    buildGlifyLayer();
+  });
   controls.appendChild(btnAll);
   controls.appendChild(btnNone);
+  controls.appendChild(modeSelect);
   body.appendChild(controls);
 
   const list = document.createElement('div');
@@ -739,6 +765,7 @@ document.getElementById('filter-toggle').addEventListener('click', () => {
 });
 
 async function loadPoints(minMaxLoaded) {
+  document.getElementById('loading-indicator').style.display = '';
   const resp = await fetch('anfr.json');
   const geojson = await resp.json();
   for (const feature of geojson.features) {
@@ -750,6 +777,7 @@ async function loadPoints(minMaxLoaded) {
       properties: feature.properties
     });
   }
+  document.getElementById('loading-indicator').style.display = 'none';
   console.log('points loaded:', features.length);
 
   if (minMaxLoaded && Object.keys(minMaxValues).length) {
@@ -808,7 +836,10 @@ map.on('click', function(e) {
   // Build properties section
   let propsHTML = '';
   for (const [k, v] of Object.entries(props)) {
-    propsHTML += `<div><span class="pk">${k}:</span> <span class="pv">${v}</span></div>`;
+    const display = (k === 'tech_bitmask1' || k === 'tech_bitmask2')
+      ? '0x' + BigInt(v ?? 0).toString(16)
+      : v;
+    propsHTML += `<div><span class="pk">${k}:</span> <span class="pv">${display}</span></div>`;
   }
 
   sbBody.innerHTML = `
