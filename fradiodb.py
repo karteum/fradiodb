@@ -19,6 +19,8 @@ import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import re
 
+GPKGFILE="anfr2026.gpkg"
+GEOJSONFILE="sites.geojson"
 # Schema diagram: d2 ./schema.d2 -s -t 100
 
 def download_data(dirpath='anfr'):
@@ -26,8 +28,8 @@ def download_data(dirpath='anfr'):
     if not exists(dirpath):
         makedirs(dirpath)
     URLS = {
-        "anfr_stations.zip": "https://www.data.gouv.fr/api/1/datasets/r/e319bdb3-20b4-4016-baec-03fe9daa653d",
-        "anfr_stations_ids.zip": "https://www.data.gouv.fr/api/1/datasets/r/426e26c0-804b-4952-8ffb-5662658ca0c1"
+        "anfr_stations.zip": "https://www.data.gouv.fr/api/1/datasets/r/5fa56156-bde6-4dd0-81e7-6dee1318f669",
+        "anfr_stations_ids.zip": "https://www.data.gouv.fr/api/1/datasets/r/cf9838a7-6945-4ec7-83bf-b1d8e7f1c33f"
         #"densites.xlsx": "https://www.insee.fr/fr/statistiques/fichier/6439600/grille_densite_7_niveaux_2023.xlsx" # https://www.insee.fr/fr/information/6439600
     }
     for k,v in URLS.items():
@@ -174,6 +176,10 @@ def dict_factory(cursor, row):
         d[col[0]] = row[idx]
     return d
 
+#def dict_factory(cursor, row):
+#    fields = [column[0] for column in cursor.description]
+#    return dict(zip(fields, row))
+
 def query(dbfilename, itemid, itemtype="site"):
     conn = sqlite3.connect(dbfilename)
     conn.row_factory = dict_factory
@@ -255,14 +261,14 @@ class fradiodb_web_handler(BaseHTTPRequestHandler):
         if self.path=="/": self.path="/index.html"
         if self.path == "/index.html":
             return self.staticfile("text/html")
-        if self.path == "/minmax.json": # obsolete
-            return self.staticfile("application/json")
+        #if self.path == "/minmax.json": # obsolete
+        #    return self.staticfile("application/json")
         if self.path == "/meta.json":
             return self.staticfile("application/json")
-        if self.path == "/anfr.json":
+        if self.path == GEOJSONFILE:
             return self.staticfile("application/geo+json")
-        if self.path == "/anfr.fgb": # obsolete
-            return self.staticfile("application/x-flatgeobuf")
+        #if self.path == "/anfr.fgb": # obsolete
+        #    return self.staticfile("application/x-flatgeobuf")
 
         # Dynamic route /site/<site_id>
         match = re.match(r"^/site/([^/]+)$", self.path)
@@ -278,7 +284,7 @@ class fradiodb_web_handler(BaseHTTPRequestHandler):
         # Otherwise 404
         self.send_error(404)
 
-def gen_anfr_json(dbfilename="anfr2026.gpkg", jsonfile="anfr.json"):
+def gen_anfr_json_ogr2ogr(dbfilename=GPKGFILE, jsonfile="anfr_ogr.json"): # superseded by the new gen_geojson()
     from os import system
     query = """select sites.id, CAST(sites.id AS INTEGER)+0 as site_id, geom,
         count(distinct supports.id) support_count, max(sup_height) h,
@@ -299,17 +305,48 @@ def gen_anfr_json(dbfilename="anfr2026.gpkg", jsonfile="anfr.json"):
     else:
         print(f"{jsonfile} created")
 
-def gen_meta_json(dbfilename="anfr2026.gpkg", jsonfile="meta.json"):
+def gen_geojson(dbfilename=GPKGFILE, jsonfile=GEOJSONFILE):
+    print("Generating GeoJSON")
+    query = """select sites.id site_id, lon, lat,
+        count(distinct supports.id) support_count, max(sup_height) h,
+        count(distinct operator) operator_count,
+        cast(group_concat(distinct operator) as text) operator_list,
+        count(distinct station_id) sta_count,count(distinct antennas.id) ant_count,
+        sites.tech_bitmask1, sites.tech_bitmask2
+        from sites
+        inner join antennas on antennas.sup_id=supports.id
+        inner join supports on sites.id=supports.site_id
+        inner join transmitters on transmitters.antenna_id=antennas.id
+        inner join id_systems on transmitters.system_id=id_systems.id
+        inner join stations on stations.id=transmitters.station_id
+        inner join id_operators on id_operators.id=stations.operator_id
+        group by sites.id"""
+    with sqlite3.connect(dbfilename) as conn, open(jsonfile, "w") as f:
+        conn.row_factory = dict_factory
+        cur = conn.cursor()
+        f.write("""{"type": "FeatureCollection", "name": "ANFR", "crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } }, "features": [\n""")
+        firstline = True
+        for line in cur.execute(query):
+            if not firstline: f.write(",\n")
+            else: firstline = False
+            coords = [line["lon"], line["lat"]]
+            del line["lon"], line["lat"]
+            feature = { "type": "Feature", "properties": line, "geometry": { "type": "Point", "coordinates": coords } }
+            f.write(json.dumps(feature))
+        f.write("]}")
+
+def gen_meta_json(dbfilename=GPKGFILE, jsonfile="meta.json"):
+    print("Generating meta.json")
     metrics = {
-        "minmax": gen_minmax_json(dbfilename="anfr2026.gpkg"),
-        "minmax_metro": gen_minmax_json(dbfilename="anfr2026.gpkg", where='metro'),
-        "minmax_overseas": gen_minmax_json(dbfilename="anfr2026.gpkg", where='overseas'),
+        "minmax": gen_minmax_json(dbfilename=dbfilename),
+        "minmax_metro": gen_minmax_json(dbfilename=dbfilename, where='metro'),
+        "minmax_overseas": gen_minmax_json(dbfilename=dbfilename, where='overseas'),
         "syslist" : get_syslist(dbfilename)
     }
     with open(jsonfile, "w") as f:
         json.dump(metrics, f)
 
-def gen_minmax_json(dbfilename="anfr2026.gpkg", where=None):
+def gen_minmax_json(dbfilename=GPKGFILE, where=None):
     latmax, lonmax, latmin, lonmin = (52, 9, 42, -5) # Bounding box France métropolitaine
     wheremetro = f"where lon>={lonmin} and lon<={lonmax} and lat>={latmin} and lat<={latmax}"
     whereoverseas = f"where lon<{lonmin} or lon>{lonmax} or lat<{latmin} or lat>{latmax}"
@@ -348,11 +385,10 @@ if __name__ == "__main__":
     parser.add_argument("dbfile", help="DB path")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
-    parser_create = subparsers.add_parser('create', help="Create DB")
+    parser_create = subparsers.add_parser('geopackage', help="Create geopackage from CSV")
     parser_create.add_argument("--force", "-f", help="Force recreating DB", action='store_true', default=False)
-    parser_create.add_argument("--download", "-d", help="Download data from data.gouv.fr", action='store_true', default=False)
     parser_create.add_argument("--datadir", "-p", help="Data location", default="anfr")
-    parser_create.add_argument("--json", "-j", help="Create json files needed for webapp", action='store_true', default=False)
+    #parser_create.add_argument("--json", "-j", help="Create json files needed for webapp", action='store_true', default=False)
 
     parser_query = subparsers.add_parser('info', help="Query DB")
     parser_query.add_argument("id", help="ID to query")
@@ -362,21 +398,30 @@ if __name__ == "__main__":
     parser_server.add_argument("--port", "-p", help="Port", default=8001)
 
     args = parser.parse_args()
+    GPKGFILE = args.dbfile
 
-    if args.subcommand=='create':
-        if args.download:
-            download_data(args.datadir)
+    if args.subcommand=='geopackage':
+        if not exists(args.datadir+'/anfr_stations.zip') or not exists(args.datadir+'/anfr_stations_ids.zip'):
+            print(args.datadir+'/anfr_stations.zip')
+            #download_data(args.datadir)
     #if args.importdb is not None:
         #import_cities(args.dbfile, dirpath=mydir)
         if args.force or not exists(args.dbfile):
             import_anfr_zip(args.dbfile, dirpath=args.datadir)
-        if args.json:
-            gen_anfr_json(args.dbfile)
-            gen_meta_json(args.dbfile)
+        #if args.json:
+        #    gen_geojson(args.dbfile)
+        #    gen_meta_json(args.dbfile)
     elif args.subcommand=='info':
         res = query(args.dbfile, args.id, args.type)
         print(res)
     elif args.subcommand=='serve':
+        if not exists(args.dbfile):
+            import_anfr_zip(args.dbfile, dirpath="anfr")
+        if not exists(GEOJSONFILE):
+            gen_geojson(args.dbfile)
+        if not exists("meta.json"):
+            gen_meta_json(args.dbfile)
+
         server = HTTPServer(("localhost", int(args.port)), fradiodb_web_handler)
         server.dbfile = args.dbfile
         print(f"Server running on http://localhost:{args.port}")
