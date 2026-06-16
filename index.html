@@ -766,7 +766,7 @@ document.getElementById('filter-toggle').addEventListener('click', () => {
 
 async function loadPoints(minMaxLoaded) {
   document.getElementById('loading-indicator').style.display = '';
-  const resp = await fetch('anfr.json');
+  const resp = await fetch('sites.geojson');
   const geojson = await resp.json();
   for (const feature of geojson.features) {
     if (feature.geometry.type !== 'Point') continue;

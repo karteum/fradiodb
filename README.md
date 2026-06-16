@@ -13,5 +13,5 @@ More details are explained (in French) on [this webpage](https://blog.karteum.ov
 This repository also includes the frontend and backend for my website [radiomap](https://radiomap.karteum.ovh/).
 
 ## Usage
-* `fradiodb.py foo.db geopackage -i foo.db [-p mydir/]` : imports and process the CSV data from directory `mydir` (by default `anfr`) into the SQLite DB `foo.db`
-* `fradiodb.py foo.db serve` : generate tables `gen_sites` and `gen_sectors` in `foo.db`
+* `fradiodb.py foo.db geopackage [-p mydir/]` : first step, you should imports and process the CSV data from directory `mydir` (by default `anfr`) into the SQLite DB `foo.db` (which is actually a geopackage that can be used in any GIS environment such as QGIS)
+* `fradiodb.py foo.db serve` : second, you may launch a web server showing a map of radio sites

@@ -265,7 +265,7 @@ class fradiodb_web_handler(BaseHTTPRequestHandler):
         #    return self.staticfile("application/json")
         if self.path == "/meta.json":
             return self.staticfile("application/json")
-        if self.path == GEOJSONFILE:
+        if self.path == "/"+GEOJSONFILE:
             return self.staticfile("application/geo+json")
         #if self.path == "/anfr.fgb": # obsolete
         #    return self.staticfile("application/x-flatgeobuf")
@@ -402,8 +402,7 @@ if __name__ == "__main__":
 
     if args.subcommand=='geopackage':
         if not exists(args.datadir+'/anfr_stations.zip') or not exists(args.datadir+'/anfr_stations_ids.zip'):
-            print(args.datadir+'/anfr_stations.zip')
-            #download_data(args.datadir)
+            download_data(args.datadir)
     #if args.importdb is not None:
         #import_cities(args.dbfile, dirpath=mydir)
         if args.force or not exists(args.dbfile):
@@ -417,7 +416,7 @@ if __name__ == "__main__":
     elif args.subcommand=='serve':
         if not exists(args.dbfile):
             import_anfr_zip(args.dbfile, dirpath="anfr")
-        if not exists(GEOJSONFILE):
+        if not exists(GEOJSONFILE) and not exists(GEOJSONFILE+'.gz'):
             gen_geojson(args.dbfile)
         if not exists("meta.json"):
             gen_meta_json(args.dbfile)
