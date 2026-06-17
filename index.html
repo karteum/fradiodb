@@ -434,22 +434,30 @@ function drawColormapBar(canvasEl) {
 drawColormapBar(document.getElementById('colormap-bar'));
 
 // ── Treeview builder ──────────────────────────────────────────────────────────
-function buildTreeview(data) {
+function buildTreeview(data, rootLabel = 'support') {
   function labelForKey(key) {
     if (key === 'antennas') return 'antenna';
     if (key === 'transmitters') return 'transmitter';
-    return 'support';
+    if (key === 'stations') return 'station';
+    return rootLabel;
   }
+  function itemId(item, itemLabel, i) {
+    if (itemLabel === 'support' && item.support_id != null) return item.support_id;
+    if (itemLabel === 'station' && item.station_name != null) return item.station_name;
+    return i;
+  }
+  const ITEM_SKIP_KEYS = { support: new Set(['support_id']), station: new Set(['station_name']) };
   function renderArray(arr, itemLabel) {
+    const skipKeys = ITEM_SKIP_KEYS[itemLabel] || new Set();
     return arr.map((item, i) => {
       if (item !== null && typeof item === 'object') {
-        return `<li><span class="tv-key">${itemLabel} ${i}</span><ul class="tv-children">${renderObj(item)}</ul></li>`;
+        return `<li><span class="tv-key">${itemLabel} ${itemId(item, itemLabel, i)}</span><ul class="tv-children">${renderObj(item, skipKeys)}</ul></li>`;
       }
       return `<li><span class="tv-val">${String(item)}</span></li>`;
     }).join('');
   }
-  function renderObj(obj) {
-    return Object.entries(obj).map(([k, v]) => {
+  function renderObj(obj, skipKeys = new Set()) {
+    return Object.entries(obj).filter(([k]) => !skipKeys.has(k)).map(([k, v]) => {
       if (v !== null && typeof v === 'object') {
         if (Array.isArray(v)) {
           const label = labelForKey(k);
@@ -463,7 +471,8 @@ function buildTreeview(data) {
       return `<li><span class="pk">${k}:</span> <span class="tv-val">${v === null ? 'null' : String(v)}</span></li>`;
     }).join('');
   }
-  const inner = Array.isArray(data) ? renderArray(data, 'support') : renderObj(data);
+  if (data == null) return '';
+  const inner = Array.isArray(data) ? renderArray(data, rootLabel) : renderObj(data);
   return `<div class="treeview"><ul>${inner}</ul></div>`;
 }
 
@@ -836,6 +845,7 @@ map.on('click', function(e) {
   // Build properties section
   let propsHTML = '';
   for (const [k, v] of Object.entries(props)) {
+    if (k === 'site_id') continue;
     const display = (k === 'tech_bitmask1' || k === 'tech_bitmask2')
       ? '0x' + BigInt(v ?? 0).toString(16)
       : v;
@@ -854,20 +864,20 @@ map.on('click', function(e) {
 
   openSidebar(siteId);
 
-  fetch(`https://radiomap.karteum.ovh/site/${siteId}`)
+  fetch(`site/${siteId}`)
     .then(r => r.json())
     .then(data => {
       const ajaxDiv = document.getElementById('sb-ajax');
       if (!ajaxDiv) return;
-      const topFields = Object.entries(data).filter(([k]) => k !== 'supports');
+      const topFields = Object.entries(data).filter(([k]) => k !== 'supports' && k !== 'stations');
       let siteInfoHTML = topFields.map(([k, v]) =>
         `<div><span class="pk">${k}:</span> <span class="pv">${v}</span></div>`
       ).join('');
       ajaxDiv.innerHTML = `
         <div class="sb-section-title">Site info</div>
         <div class="sb-props">${siteInfoHTML}</div>
-        <div class="sb-section-title" style="margin-top:10px">Supports</div>
-        ${buildTreeview(data.supports)}`;
+        ${data.supports != null ? `<div class="sb-section-title" style="margin-top:10px">Supports</div>${buildTreeview(data.supports)}` : ''}
+        ${data.stations != null ? `<div class="sb-section-title" style="margin-top:10px">Stations</div>${buildTreeview(data.stations, 'station')}` : ''}`;
       ajaxDiv.addEventListener('click', ev => {
         const el = ev.target.closest('.tv-key');
         if (!el) return;

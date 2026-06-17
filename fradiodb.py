@@ -7,8 +7,8 @@
 
 import sqlite3
 from glob import glob
-from os import sep,makedirs,remove,getcwd
-from os.path import splitext,basename,exists
+from os import sep,makedirs,remove,getcwd,listdir
+from os.path import splitext,basename,exists,isfile
 import zipfile
 import csv
 import io
@@ -19,23 +19,36 @@ import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import re
 
-GPKGFILE="anfr2026.gpkg"
 GEOJSONFILE="sites.geojson"
 # Schema diagram: d2 ./schema.d2 -s -t 100
+#"densites.xlsx": "https://www.insee.fr/fr/statistiques/fichier/6439600/grille_densite_7_niveaux_2023.xlsx" # https://www.insee.fr/fr/information/6439600
+#import_cities(args.dbfile, dirpath=mydir)
 
 def download_data(dirpath='anfr'):
     # From https://www.data.gouv.fr/fr/datasets/donnees-sur-les-installations-radioelectriques-de-plus-de-5-watts-1/
+    print("Downloading data")
     if not exists(dirpath):
         makedirs(dirpath)
-    URLS = {
-        "anfr_stations.zip": "https://www.data.gouv.fr/api/1/datasets/r/5fa56156-bde6-4dd0-81e7-6dee1318f669",
-        "anfr_stations_ids.zip": "https://www.data.gouv.fr/api/1/datasets/r/cf9838a7-6945-4ec7-83bf-b1d8e7f1c33f"
-        #"densites.xlsx": "https://www.insee.fr/fr/statistiques/fichier/6439600/grille_densite_7_niveaux_2023.xlsx" # https://www.insee.fr/fr/information/6439600
-    }
-    for k,v in URLS.items():
-        print(f"Downloading {k}")
-        req.urlretrieve(v, filename=dirpath+sep+k)
-    print('Download OK')
+    API = "https://www.data.gouv.fr/api/1/datasets/donnees-sur-les-installations-radioelectriques-de-plus-de-5-watts-1"
+    with req.urlopen(API, timeout=30) as resp:
+        data = json.load(resp)
+    r = data["resources"]
+    url0 = r[0]["url"] ; url1 = r[1]["url"]
+    req.urlretrieve(url0, dirpath+sep+basename(url0)) # First entry should be the latest file with data tables
+    req.urlretrieve(url1, dirpath+sep+basename(url1)) # Second entry should be the latest file with ID tables
+
+# def download_data_(dirpath='anfr'):
+#     # From https://www.data.gouv.fr/fr/datasets/donnees-sur-les-installations-radioelectriques-de-plus-de-5-watts-1/
+#     if not exists(dirpath):
+#         makedirs(dirpath)
+#     URLS = {
+#         "anfr_stations.zip": "https://www.data.gouv.fr/api/1/datasets/r/5fa56156-bde6-4dd0-81e7-6dee1318f669",
+#         "anfr_stations_ids.zip": "https://www.data.gouv.fr/api/1/datasets/r/cf9838a7-6945-4ec7-83bf-b1d8e7f1c33f"
+#     }
+#     for k,v in URLS.items():
+#         print(f"Downloading {k}")
+#         req.urlretrieve(v, filename=dirpath+sep+k)
+#     print('Download OK')
 
 def coalesce_freqs(bandlist_str):
     # bandlist_str is a string listing several bands fmin_fmax, sorted by fmin
@@ -83,10 +96,13 @@ def import_anfr_zip(dbfilename, dirpath='anfr'):
         conn.create_function("pycoalesce", 1, coalesce_freqs)
         conn.create_function("pywbkpoint", 2, wkb_point)
         cur = conn.cursor()
+        myzipfiles = sorted([ f for f in listdir(dirpath) if isfile(dirpath+sep+f) and f.startswith('20') and (f.endswith('export-etalab-data.zip') or f.endswith('export-etalab-ref.zip')) ], reverse=True)
 
         # Import CSVs into SQL tables
-        for myzipfile in glob(dirpath + sep + "*anfr*.zip"):
-            with zipfile.ZipFile(myzipfile) as zFile:
+        #for myzipfile in glob(dirpath + sep + "*anfr*.zip"):
+        for myzipfile in myzipfiles[slice(2)]:
+            print("Using " + myzipfile)
+            with zipfile.ZipFile(dirpath+sep+myzipfile) as zFile:
                 for csvfile in zFile.infolist():
                     tablename = splitext(basename(csvfile.filename))[0].lower()
                     with zFile.open(csvfile) as binz, io.TextIOWrapper(binz, encoding='iso8859-1' if tablename == "sup_support" else "utf-8") as textz:
@@ -183,13 +199,13 @@ def dict_factory(cursor, row):
 def query(dbfilename, itemid, itemtype="site"):
     conn = sqlite3.connect(dbfilename)
     conn.row_factory = dict_factory
-    if itemtype=="site":
-        SYSLIST = get_syslist(dbfilename) # FIXME: cache this result
-        return json.dumps(query_site(conn, itemid, SYSLIST))
-    elif itemtype=='support':
-        return json.dumps(query_antennas(conn, itemid))
-    elif itemtype=='antenna':
-        return json.dumps(query_transmitters(conn, itemid))
+    # if itemtype=="site":
+    SYSLIST = get_syslist(dbfilename) # FIXME: cache this result
+    return json.dumps(query_site(conn, itemid, SYSLIST))
+    # elif itemtype=='support':
+    #     return json.dumps(query_antennas(conn, itemid))
+    # elif itemtype=='antenna':
+    #     return json.dumps(query_transmitters(conn, itemid))
 
 def query_site(conn, site_id, syslist):
     cur  = conn.cursor()
@@ -205,6 +221,7 @@ def query_site(conn, site_id, syslist):
     res['tech_list'] = list_from_mask(masks64_to_mask128(res['tech_bitmask1'],res['tech_bitmask2']),syslist)
     del res['tech_bitmask1'],res['tech_bitmask2']
     res['supports'] = query_supports(conn, site_id)
+    res['stations'] = query_stations(conn, site_id) # FIXME: performance issues
     return res
 
 def query_supports(conn, site_id):
@@ -214,19 +231,19 @@ def query_supports(conn, site_id):
                                          left outer join id_support_owners on id_support_owners.id=owner_id
                                          where site_id=?""", (site_id,)).fetchall()
     for res in res_supports:
-        res['antennas'] = query_antennas(conn, res['support_id'])
+        res['antennas'] = query_antennas_from_supports(conn, res['support_id'])
     return res_supports
 
-def query_antennas(conn, support_id):
+def query_antennas_from_supports(conn, support_id):
     cur  = conn.cursor()
     res_antennas = cur.execute("""select antennas.id antenna_id, dimension, azimuth, ant_height, dim_type, antenna_type from antennas
                                          inner join id_antenna_types on anttype_id=id_antenna_types.id
                                          where sup_id=?""", (support_id,)).fetchall()
     for res in res_antennas:
-        res['transmitters'] = query_transmitters(conn, res['antenna_id'])
+        res['transmitters'] = query_transmitters_from_antenna(conn, res['antenna_id'])
     return res_antennas
 
-def query_transmitters(conn, antenna_id):
+def query_transmitters_from_antenna(conn, antenna_id):
     cur  = conn.cursor()
     res_transmitters = cur.execute("""select station_name, operator, system, date(date_switchedon,'unixepoch') date_on, bandstr band_kHz
                                          from transmitters
@@ -235,6 +252,31 @@ def query_transmitters(conn, antenna_id):
                                          inner join id_operators on operator_id=id_operators.id
                                          inner join v_bandgroups on bandgroup_id=v_bandgroups.id
                                          where antenna_id=?""", (antenna_id,)).fetchall()
+    return res_transmitters 
+
+def query_stations(conn, site_id):
+    cur  = conn.cursor()
+    # res_stations = cur.execute("""select distinct stations.id station_id, station_name, operator, date(date_operational,'unixepoch') date_on from stations
+    #                                  inner join id_operators on operator_id=id_operators.id
+    #                                  join transmitters on stations.id=station_id
+    #                                  join antennas on antennas.id=antenna_id
+    #                                  join supports on supports.id=sup_id
+    #                                  join sites on sites.id=site_id
+    #                                  where site_id=?""", (site_id,)).fetchall()
+    res_stations = cur.execute("""select stations.id station_id, station_name, operator, date(date_operational,'unixepoch') date_on from stations
+                                  inner join id_operators on operator_id=id_operators.id where site_id=?""", (site_id,)).fetchall()
+    for res in res_stations:
+        res['transmitters'] = query_transmitters_from_station(conn, res['station_id'])
+    return res_stations
+
+def query_transmitters_from_station(conn, station_id):
+    cur  = conn.cursor()
+    res_transmitters = cur.execute("""select system, bandstr band_kHz, date(date_switchedon,'unixepoch') date_on
+                                         from transmitters
+                                         inner join id_systems on system_id=id_systems.id
+                                         inner join stations on station_id=stations.id
+                                         inner join v_bandgroups on bandgroup_id=v_bandgroups.id
+                                         where station_id=?""", (station_id,)).fetchall()
     return res_transmitters 
 
 class fradiodb_web_handler(BaseHTTPRequestHandler):
@@ -261,8 +303,6 @@ class fradiodb_web_handler(BaseHTTPRequestHandler):
         if self.path=="/": self.path="/index.html"
         if self.path == "/index.html":
             return self.staticfile("text/html")
-        #if self.path == "/minmax.json": # obsolete
-        #    return self.staticfile("application/json")
         if self.path == "/meta.json":
             return self.staticfile("application/json")
         if self.path == "/"+GEOJSONFILE:
@@ -284,28 +324,8 @@ class fradiodb_web_handler(BaseHTTPRequestHandler):
         # Otherwise 404
         self.send_error(404)
 
-def gen_anfr_json_ogr2ogr(dbfilename=GPKGFILE, jsonfile="anfr_ogr.json"): # superseded by the new gen_geojson()
-    from os import system
-    query = """select sites.id, CAST(sites.id AS INTEGER)+0 as site_id, geom,
-        count(distinct supports.id) support_count, max(sup_height) h,
-        count(distinct operator) operator_count,
-        cast(group_concat(distinct operator) as text) operator_list,
-        count(distinct station_id) sta_count,count(distinct antennas.id) ant_count,
-        sites.tech_bitmask1, sites.tech_bitmask2
-        from sites
-        inner join antennas on antennas.sup_id=supports.id
-        inner join supports on sites.id=supports.site_id
-        inner join transmitters on transmitters.antenna_id=antennas.id
-        inner join id_systems on transmitters.system_id=id_systems.id
-        inner join stations on stations.id=transmitters.station_id
-        inner join id_operators on id_operators.id=stations.operator_id
-        group by sites.id"""
-    if system(f"ogr2ogr -f GeoJSON '{jsonfile}' '{dbfilename}' -sql '{query}'"):
-        print("Error: is ogr2ogr installed ?")
-    else:
-        print(f"{jsonfile} created")
-
-def gen_geojson(dbfilename=GPKGFILE, jsonfile=GEOJSONFILE):
+def gen_geojson(dbfilename, jsonfile=GEOJSONFILE):
+    # Equivalent to system(f"ogr2ogr -f GeoJSON '{jsonfile}' '{dbfilename}' -sql '{query}'")
     print("Generating GeoJSON")
     query = """select sites.id site_id, lon, lat,
         count(distinct supports.id) support_count, max(sup_height) h,
@@ -335,7 +355,7 @@ def gen_geojson(dbfilename=GPKGFILE, jsonfile=GEOJSONFILE):
             f.write(json.dumps(feature))
         f.write("]}")
 
-def gen_meta_json(dbfilename=GPKGFILE, jsonfile="meta.json"):
+def gen_meta_json(dbfilename, jsonfile="meta.json"):
     print("Generating meta.json")
     metrics = {
         "minmax": gen_minmax_json(dbfilename=dbfilename),
@@ -346,7 +366,7 @@ def gen_meta_json(dbfilename=GPKGFILE, jsonfile="meta.json"):
     with open(jsonfile, "w") as f:
         json.dump(metrics, f)
 
-def gen_minmax_json(dbfilename=GPKGFILE, where=None):
+def gen_minmax_json(dbfilename, where=None):
     latmax, lonmax, latmin, lonmin = (52, 9, 42, -5) # Bounding box France métropolitaine
     wheremetro = f"where lon>={lonmin} and lon<={lonmax} and lat>={latmin} and lat<={latmax}"
     whereoverseas = f"where lon<{lonmin} or lon>{lonmax} or lat<{latmin} or lat>{latmax}"
@@ -384,11 +404,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("dbfile", help="DB path")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
+    parser_dl = subparsers.add_parser('download', help="Download data")
+    parser_dl.add_argument("--datadir", "-p", help="Data location", default="anfr")
 
     parser_create = subparsers.add_parser('geopackage', help="Create geopackage from CSV")
     parser_create.add_argument("--force", "-f", help="Force recreating DB", action='store_true', default=False)
     parser_create.add_argument("--datadir", "-p", help="Data location", default="anfr")
-    #parser_create.add_argument("--json", "-j", help="Create json files needed for webapp", action='store_true', default=False)
 
     parser_query = subparsers.add_parser('info', help="Query DB")
     parser_query.add_argument("id", help="ID to query")
@@ -398,18 +419,14 @@ if __name__ == "__main__":
     parser_server.add_argument("--port", "-p", help="Port", default=8001)
 
     args = parser.parse_args()
-    GPKGFILE = args.dbfile
 
+    if args.subcommand=='download':
+        download_data(args.datadir)
     if args.subcommand=='geopackage':
         if not exists(args.datadir+'/anfr_stations.zip') or not exists(args.datadir+'/anfr_stations_ids.zip'):
             download_data(args.datadir)
-    #if args.importdb is not None:
-        #import_cities(args.dbfile, dirpath=mydir)
         if args.force or not exists(args.dbfile):
             import_anfr_zip(args.dbfile, dirpath=args.datadir)
-        #if args.json:
-        #    gen_geojson(args.dbfile)
-        #    gen_meta_json(args.dbfile)
     elif args.subcommand=='info':
         res = query(args.dbfile, args.id, args.type)
         print(res)

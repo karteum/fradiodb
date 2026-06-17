@@ -126,6 +126,19 @@ insert into id_support_owners select TPO_ID, TPO_LB from sup_proprietaire;
 create table id_operators (id integer primary key, operator text) strict;
 insert into id_operators select ADM_ID, ADM_LB_NOM from sup_exploitant;
 
+create table sites (
+    id integer primary key,
+    dms text unique,
+    lon real,
+    lat real,
+    address text,
+    postcode integer,
+    inseecode text,
+    tech_bitmask1 integer,
+    tech_bitmask2 integer,
+    geom BLOB
+) strict;
+
 select pyprint('Processing sup_station');
 update sup_station set DTE_EN_SERVICE=NULL where DTE_EN_SERVICE='';
 update sup_station set DTE_MODIF=NULL where DTE_MODIF='';
@@ -138,12 +151,14 @@ create table stations (
     date_operational integer,
     tech_bitmask1 integer,
     tech_bitmask2 integer,
+    site_id integer, -- this is duplicate information for performance reasons (it can be retrieved from another path through sites->supports->antennas->transmitters->stations)
+    foreign key(site_id) references sites(id),
     foreign key(operator_id) references id_operators(id)
 ) strict;
-insert into stations select DEM_NM_COMSIS, ADM_ID, STA_NM_ANFR, NULL, NULL, -- store dates as unix epoch
+insert into stations select DEM_NM_COMSIS, ADM_ID, STA_NM_ANFR, -- store dates as unix epoch
     strftime('%s', substr(DTE_IMPLANTATION, 7, 4) || '-' || substr(DTE_IMPLANTATION, 4, 2) || '-' || substr(DTE_IMPLANTATION, 1, 2)),
     strftime('%s', substr(DTE_MODIF, 7, 4) || '-' || substr(DTE_MODIF, 4, 2) || '-' || substr(DTE_MODIF, 1, 2)),
-    strftime('%s', substr(DTE_EN_SERVICE, 7, 4) || '-' || substr(DTE_EN_SERVICE, 4, 2) || '-' || substr(DTE_EN_SERVICE, 1, 2))
+    strftime('%s', substr(DTE_EN_SERVICE, 7, 4) || '-' || substr(DTE_EN_SERVICE, 4, 2) || '-' || substr(DTE_EN_SERVICE, 1, 2)), NULL, NULL, NULL
     from sup_station;
 
 select pyprint('Processing sup_support');
@@ -164,18 +179,6 @@ update tmp_supports set ADR_NM_CP=pyfix_cp(lon, lat), COM_CD_INSEE=pyfix_insee(l
     (select dms from (select distinct dms, adr_nm_cp, com_cd_insee from tmp_supports)
     group by dms having count(dms)>1);
 
-create table sites (
-    id integer primary key,
-    dms text unique,
-    lon real,
-    lat real,
-    address text,
-    postcode integer,
-    inseecode text,
-    tech_bitmask1 integer,
-    tech_bitmask2 integer,
-    geom BLOB
-) strict;
 insert into sites(dms,lon,lat,postcode,inseecode, geom) select distinct dms, lon, lat, ADR_NM_CP, COM_CD_INSEE, pywbkpoint(lon,lat) from tmp_supports;
 update sites set address=addgroup from -- Unfortunately sqlite does not support group_concat(distinct address, ' ¤ ') so this is a workaround
     (select dms, group_concat(address, ' ¤ ') addgroup from
@@ -260,6 +263,20 @@ insert into transmitters select sup_emetteur.EMR_ID, stations.id, AER_ID, id_sys
     inner join tmp_bands5 on tmp_bands5.emr_id=sup_emetteur.emr_id;
 create index transmitters_antenna_idx on transmitters(antenna_id);
 create index transmitters_station_idx on transmitters(station_id);
+
+
+-- Adding site_id to stations
+create temp view tmp_stasites as select stations.id station_id, supports.site_id as sid from stations
+join transmitters on stations.id=station_id
+join antennas on antennas.id=antenna_id
+join supports on supports.id=sup_id
+join sites on sites.id=supports.site_id
+group by station_id;
+select pyprint('foo');
+update stations set site_id=sid from tmp_stasites where stations.id=tmp_stasites.station_id;
+select pyprint('bar');
+
+
 
 select pyprint('Adding views');
 -- Add a couple of views for convenience
