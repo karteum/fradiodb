@@ -37,19 +37,6 @@ def download_data(dirpath='anfr'):
     req.urlretrieve(url0, dirpath+sep+basename(url0)) # First entry should be the latest file with data tables
     req.urlretrieve(url1, dirpath+sep+basename(url1)) # Second entry should be the latest file with ID tables
 
-# def download_data_(dirpath='anfr'):
-#     # From https://www.data.gouv.fr/fr/datasets/donnees-sur-les-installations-radioelectriques-de-plus-de-5-watts-1/
-#     if not exists(dirpath):
-#         makedirs(dirpath)
-#     URLS = {
-#         "anfr_stations.zip": "https://www.data.gouv.fr/api/1/datasets/r/5fa56156-bde6-4dd0-81e7-6dee1318f669",
-#         "anfr_stations_ids.zip": "https://www.data.gouv.fr/api/1/datasets/r/cf9838a7-6945-4ec7-83bf-b1d8e7f1c33f"
-#     }
-#     for k,v in URLS.items():
-#         print(f"Downloading {k}")
-#         req.urlretrieve(v, filename=dirpath+sep+k)
-#     print('Download OK')
-
 def coalesce_freqs(bandlist_str):
     # bandlist_str is a string listing several bands fmin_fmax, sorted by fmin
     # small trick: (fmin,fmax) is encoded as (real,imag) to avoid nested lists and associated performance issues
@@ -99,13 +86,12 @@ def import_anfr_zip(dbfilename, dirpath='anfr'):
         myzipfiles = sorted([ f for f in listdir(dirpath) if isfile(dirpath+sep+f) and f.startswith('20') and (f.endswith('export-etalab-data.zip') or f.endswith('export-etalab-ref.zip')) ], reverse=True)
 
         # Import CSVs into SQL tables
-        #for myzipfile in glob(dirpath + sep + "*anfr*.zip"):
         for myzipfile in myzipfiles[slice(2)]:
             print("Using " + myzipfile)
             with zipfile.ZipFile(dirpath+sep+myzipfile) as zFile:
                 for csvfile in zFile.infolist():
                     tablename = splitext(basename(csvfile.filename))[0].lower()
-                    with zFile.open(csvfile) as binz, io.TextIOWrapper(binz, encoding='iso8859-1' if tablename == "sup_support" else "utf-8") as textz:
+                    with zFile.open(csvfile) as binz, io.TextIOWrapper(binz, encoding="utf-8") as textz:
                         print("importing " + csvfile.filename)
                         reader = csv.reader(textz, delimiter=";")
                         headers = next(reader)
@@ -210,14 +196,6 @@ def query(dbfilename, itemid, itemtype="site"):
 def query_site(conn, site_id, syslist):
     cur  = conn.cursor()
     res = cur.execute("""select dms, lon, lat, address, postcode, inseecode, tech_bitmask1, tech_bitmask2 from sites where sites.id=?""", (site_id,)).fetchall()[0]
-    # res['stations'] = cur.execute("""
-    #     select cast(group_concat(distinct station_id) as text) sta_list,
-    #     from sites
-    #     inner join antennas on antennas.sup_id=supports.id
-    #     inner join supports on sites.id=supports.site_id
-    #     inner join transmitters on transmitters.antenna_id=antennas.id
-    #     inner join stations on stations.id=transmitters.station_id where sites.id=?
-    #     group by sites.id""", (site_id,)).fetchall()[0]
     res['tech_list'] = list_from_mask(masks64_to_mask128(res['tech_bitmask1'],res['tech_bitmask2']),syslist)
     del res['tech_bitmask1'],res['tech_bitmask2']
     res['supports'] = query_supports(conn, site_id)
@@ -407,7 +385,7 @@ if __name__ == "__main__":
     parser_dl = subparsers.add_parser('download', help="Download data")
     parser_dl.add_argument("--datadir", "-p", help="Data location", default="anfr")
 
-    parser_create = subparsers.add_parser('geopackage', help="Create geopackage from CSV")
+    parser_create = subparsers.add_parser('init', help="Create geopackage from CSV")
     parser_create.add_argument("--force", "-f", help="Force recreating DB", action='store_true', default=False)
     parser_create.add_argument("--datadir", "-p", help="Data location", default="anfr")
 
@@ -422,9 +400,7 @@ if __name__ == "__main__":
 
     if args.subcommand=='download':
         download_data(args.datadir)
-    if args.subcommand=='geopackage':
-        if not exists(args.datadir+'/anfr_stations.zip') or not exists(args.datadir+'/anfr_stations_ids.zip'):
-            download_data(args.datadir)
+    if args.subcommand=='init':
         if args.force or not exists(args.dbfile):
             import_anfr_zip(args.dbfile, dirpath=args.datadir)
     elif args.subcommand=='info':

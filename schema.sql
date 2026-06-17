@@ -264,19 +264,14 @@ insert into transmitters select sup_emetteur.EMR_ID, stations.id, AER_ID, id_sys
 create index transmitters_antenna_idx on transmitters(antenna_id);
 create index transmitters_station_idx on transmitters(station_id);
 
-
 -- Adding site_id to stations
 create temp view tmp_stasites as select stations.id station_id, supports.site_id as sid from stations
 join transmitters on stations.id=station_id
 join antennas on antennas.id=antenna_id
 join supports on supports.id=sup_id
 join sites on sites.id=supports.site_id
-group by station_id;
-select pyprint('foo');
+group by station_id; -- FIXME: why does "distinct" return more results ?
 update stations set site_id=sid from tmp_stasites where stations.id=tmp_stasites.station_id;
-select pyprint('bar');
-
-
 
 select pyprint('Adding views');
 -- Add a couple of views for convenience
