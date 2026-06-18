@@ -495,9 +495,7 @@ let filters = {};        // { prop: minThreshold } — sites below threshold are
 let activeFeatures = []; // subset of features passing current filters
 let displayToActive = []; // maps glify point index → activeFeatures index (duplicates share same entry)
 let syslist = [];        // technology names from meta.json
-const TECH_MAX_BIT = 53n;
-let selected_bitmask1 = 0n; // BigInt: selected techs at syslist indices 0–52
-let selected_bitmask2 = 0n; // BigInt: selected techs at syslist indices 53+
+let selected_bitmask = 0n; // BigInt: selected techs bitmask
 let techFilterMode = 'OR';  // 'OR' or 'AND'
 
 function isMetro(feature) {
@@ -520,12 +518,11 @@ function isFiltered(feature) {
     if (typeof val !== 'number' || val < threshold) return true;
   }
   if (syslist.length) {
-    const b1 = BigInt(feature.properties.tech_bitmask1 ?? 0);
-    const b2 = BigInt(feature.properties.tech_bitmask2 ?? 0);
+    const b = feature.properties.tech_bitmask ?? 0n;
     if (techFilterMode === 'OR') {
-      if ((b1 & selected_bitmask1) === 0n && (b2 & selected_bitmask2) === 0n) return true;
+      if ((b & selected_bitmask) === 0n) return true;
     } else {
-      if (!((b1 & selected_bitmask1) === selected_bitmask1 && (b2 & selected_bitmask2) === selected_bitmask2)) return true;
+      if ((b & selected_bitmask) !== selected_bitmask) return true;
     }
   }
   return false;
@@ -580,6 +577,12 @@ function buildGlifyLayer() {
   });
 }
 
+function bitCount(n) {
+  let count = 0n;
+  while (n) { n &= n - 1n; count++; }
+  return count;
+}
+
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 const sidebar    = document.getElementById('sidebar');
 const sbTitle    = document.getElementById('sidebar-title');
@@ -630,12 +633,9 @@ function computeSelectedBitmasks(checkboxEls) {
   checkboxEls.forEach((cb, i) => {
     if (cb.checked) mask |= (1n << BigInt(i));
   });
-  selected_bitmask1 = mask & ((1n << TECH_MAX_BIT) - 1n);
-  selected_bitmask2 = mask >> TECH_MAX_BIT;
-  const el1 = document.getElementById('bitmask1-display');
-  const el2 = document.getElementById('bitmask2-display');
-  if (el1) el1.textContent = '0x' + selected_bitmask1.toString(16);
-  if (el2) el2.textContent = '0x' + selected_bitmask2.toString(16);
+  selected_bitmask = mask;
+  const el = document.getElementById('bitmask-display');
+  if (el) el.textContent = '0x' + selected_bitmask.toString(16);
 }
 
 function buildFilterPanel() {
@@ -694,8 +694,7 @@ function buildFilterPanel() {
   const bitmaskDiv = document.createElement('div');
   bitmaskDiv.className = 'filter-bitmasks';
   bitmaskDiv.innerHTML =
-    'bitmask1: <span id="bitmask1-display">0</span><br>' +
-    'bitmask2: <span id="bitmask2-display">0</span><br>' +
+    'bitmask: <span id="bitmask-display">0x0</span><br>' +
     'count: <span id="active-count-display">0</span>';
   body.appendChild(bitmaskDiv);
 
@@ -780,6 +779,8 @@ async function loadPoints(minMaxLoaded) {
   for (const feature of geojson.features) {
     if (feature.geometry.type !== 'Point') continue;
     const [lng, lat] = feature.geometry.coordinates;
+    feature.properties.tech_bitmask = BigInt(feature.properties.tech_bitmask ?? 0);
+    feature.properties.tech_count = Number(bitCount(feature.properties.tech_bitmask));
     features.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [lat, lng] },
@@ -845,10 +846,21 @@ map.on('click', function(e) {
   // Build properties section
   let propsHTML = '';
   for (const [k, v] of Object.entries(props)) {
-    if (k === 'site_id') continue;
-    const display = (k === 'tech_bitmask1' || k === 'tech_bitmask2')
-      ? '0x' + BigInt(v ?? 0).toString(16)
-      : v;
+    if (k === 'site_id' || k === 'tech_count') continue;
+    let display;
+    if (k === 'tech_bitmask') {
+      const bm = BigInt(v ?? 0);
+      display = '0x' + bm.toString(16);
+      propsHTML += `<div><span class="pk">${k}:</span> <span class="pv">${display}</span></div>`;
+      propsHTML += `<div><span class="pk">tech_count:</span> <span class="pv">${props.tech_count}</span></div>`;
+      if (syslist.length) {
+        const techs = syslist.filter((_, i) => (bm >> BigInt(i)) & 1n).join(', ');
+        propsHTML += `<div><span class="pk">tech_list:</span> <span class="pv">${techs || '—'}</span></div>`;
+      }
+      continue;
+    } else {
+      display = v;
+    }
     propsHTML += `<div><span class="pk">${k}:</span> <span class="pv">${display}</span></div>`;
   }
 

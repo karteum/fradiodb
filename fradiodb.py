@@ -195,11 +195,11 @@ def query(dbfilename, itemid, itemtype="site"):
 
 def query_site(conn, site_id, syslist):
     cur  = conn.cursor()
-    res = cur.execute("""select dms, lon, lat, address, postcode, inseecode, tech_bitmask1, tech_bitmask2 from sites where sites.id=?""", (site_id,)).fetchall()[0]
-    res['tech_list'] = list_from_mask(masks64_to_mask128(res['tech_bitmask1'],res['tech_bitmask2']),syslist)
-    del res['tech_bitmask1'],res['tech_bitmask2']
+    res = cur.execute("""select dms, lon, lat, address, postcode, inseecode from sites where sites.id=?""", (site_id,)).fetchall()[0] #, tech_bitmask1, tech_bitmask2
+    #res['tech_list'] = list_from_mask(masks64_to_mask128(res['tech_bitmask1'],res['tech_bitmask2']),syslist)
+    #del res['tech_bitmask1'],res['tech_bitmask2']
     res['supports'] = query_supports(conn, site_id)
-    res['stations'] = query_stations(conn, site_id) # FIXME: performance issues
+    res['stations'] = query_stations(conn, site_id)
     return res
 
 def query_supports(conn, site_id):
@@ -328,7 +328,8 @@ def gen_geojson(dbfilename, jsonfile=GEOJSONFILE):
             if not firstline: f.write(",\n")
             else: firstline = False
             coords = [line["lon"], line["lat"]]
-            del line["lon"], line["lat"]
+            line["tech_bitmask"] = hex(masks64_to_mask128(line["tech_bitmask1"], line["tech_bitmask2"]))
+            del line["lon"], line["lat"], line["tech_bitmask1"], line["tech_bitmask2"]
             feature = { "type": "Feature", "properties": line, "geometry": { "type": "Point", "coordinates": coords } }
             f.write(json.dumps(feature))
         f.write("]}")
@@ -355,9 +356,9 @@ def gen_minmax_json(dbfilename, where=None):
     conn.row_factory = dict_factory
     query = f"""select min(support_count) sup_c_min, max(support_count) sup_c_max, min(h) h_min, max(h) h_max,
                min(operator_count) op_c_min, max(operator_count) op_c_max, min(sta_count) sta_c_min, max(sta_count) sta_c_max,
-               min(ant_count) ant_c_min, max(ant_count) ant_c_max
+               min(ant_count) ant_c_min, max(ant_count) ant_c_max, min(tech_count) tech_count_min, max(tech_count) tech_count_max
                    from (select count(distinct supports.id) support_count, max(sup_height) h, count(distinct operator) operator_count,
-                    count(distinct station_id) sta_count,count(distinct antennas.id) ant_count
+                    count(distinct station_id) sta_count,count(distinct antennas.id) ant_count,count(distinct system) tech_count
                     from sites
                     inner join antennas on antennas.sup_id=supports.id
                     inner join supports on sites.id=supports.site_id
@@ -375,6 +376,7 @@ def gen_minmax_json(dbfilename, where=None):
         #"operator_count": [res['op_c_min'], res['op_c_max']],
         "sta_count": [res['sta_c_min'], res['sta_c_max']],
         "ant_count": [res['ant_c_min'], res['ant_c_max']],
+        "tech_count" : [res['tech_count_min'], res['tech_count_max']]
     }
     return metrics
 
