@@ -216,7 +216,7 @@ def query_antennas_from_supports(conn, support_id):
     cur  = conn.cursor()
     res_antennas = cur.execute("""select antennas.id antenna_id, dimension, azimuth, ant_height, dim_type, antenna_type from antennas
                                          inner join id_antenna_types on anttype_id=id_antenna_types.id
-                                         where sup_id=?""", (support_id,)).fetchall()
+                                         where sup_id=? order by ant_height""", (support_id,)).fetchall()
     for res in res_antennas:
         res['transmitters'] = query_transmitters_from_antenna(conn, res['antenna_id'])
     return res_antennas

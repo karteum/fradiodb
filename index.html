@@ -446,12 +446,32 @@ function buildTreeview(data, rootLabel = 'support') {
     if (itemLabel === 'station' && item.station_name != null) return item.station_name;
     return i;
   }
-  const ITEM_SKIP_KEYS = { support: new Set(['support_id']), station: new Set(['station_name']) };
+  const ITEM_SKIP_KEYS = { support: new Set(['support_id']), station: new Set(['station_name', 'operator']), antenna: new Set(['antenna_id', 'ant_height', 'azimuth']), transmitter: new Set(['system', 'operator']) };
+  function itemTitle(item, itemLabel, i) {
+    if (itemLabel === 'antenna') {
+      const id = item.antenna_id != null ? item.antenna_id : i;
+      const parts = [];
+      if (item.ant_height != null) parts.push(`${item.ant_height}m`);
+      if (item.azimuth != null) parts.push(`${item.azimuth}°`);
+      return `antenna ${id}${parts.length ? ' : ' + parts.join(', ') : ''}`;
+    }
+    if (itemLabel === 'station') {
+      const name = item.station_name != null ? item.station_name : i;
+      return `station ${name}${item.operator != null ? ' : ' + item.operator : ''}`;
+    }
+    if (itemLabel === 'transmitter') {
+      const parts = [];
+      if (item.system != null) parts.push(item.system);
+      if (item.operator != null) parts.push(item.operator);
+      return `transmitter ${i}${parts.length ? ' : ' + parts.join(', ') : ''}`;
+    }
+    return `${itemLabel} ${itemId(item, itemLabel, i)}`;
+  }
   function renderArray(arr, itemLabel) {
     const skipKeys = ITEM_SKIP_KEYS[itemLabel] || new Set();
     return arr.map((item, i) => {
       if (item !== null && typeof item === 'object') {
-        return `<li><span class="tv-key">${itemLabel} ${itemId(item, itemLabel, i)}</span><ul class="tv-children">${renderObj(item, skipKeys)}</ul></li>`;
+        return `<li><span class="tv-key">${itemTitle(item, itemLabel, i)}</span><ul class="tv-children">${renderObj(item, skipKeys)}</ul></li>`;
       }
       return `<li><span class="tv-val">${String(item)}</span></li>`;
     }).join('');
