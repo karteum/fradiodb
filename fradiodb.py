@@ -125,11 +125,15 @@ def import_anfr_zip(dbfilename, dirpath='anfr'):
                 drop table tmp_{table};
             """)
 
-def get_syslist(dbfilename):
+def get_id_table(dbfilename, id_table):
+    if id_table=='id_systems': query = 'select system from id_systems'
+    elif id_table=='id_operators': query = 'select operator from id_operators'
+    elif id_table=='id_antenna_types': query = 'select antenna_type from id_antenna_types'
+    elif id_table=='id_support_types': query = 'select support_type from id_support_types'
+    elif id_table=='id_support_owners': query = 'select support_owner from id_support_owners'
     with sqlite3.connect(dbfilename) as conn:
         cur = conn.cursor()
-        SYSLIST = [k[0] for k in cur.execute('select system from id_systems').fetchall()]
-    return SYSLIST
+        return [k[0] for k in cur.execute(query).fetchall()]
 
 def mask_from_list(strlist, masklist=None):
     if strlist is None: return None
@@ -186,8 +190,9 @@ def query(dbfilename, itemid, itemtype="site"):
     conn = sqlite3.connect(dbfilename)
     conn.row_factory = dict_factory
     # if itemtype=="site":
-    SYSLIST = get_syslist(dbfilename) # FIXME: cache this result
-    return json.dumps(query_site(conn, itemid, SYSLIST))
+    SYSLIST = get_id_table(dbfilename, 'id_systems') # FIXME: cache this result
+    return query_site(conn, itemid, SYSLIST)
+    #return json.dumps(query_site(conn, itemid, SYSLIST))
     # elif itemtype=='support':
     #     return json.dumps(query_antennas(conn, itemid))
     # elif itemtype=='antenna':
@@ -292,11 +297,41 @@ class fradiodb_web_handler(BaseHTTPRequestHandler):
         match = re.match(r"^/site/([^/]+)$", self.path)
         if match:
             site_id = match.group(1)
-            payload = query(self.server.dbfile, int(site_id), "site")
+            payload = json.dumps(query(self.server.dbfile, int(site_id), "site"), ensure_ascii=False)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(payload.encode("utf-8"))
+            return
+        match = re.match(r"^/summary/([^/]+)$", self.path)
+        if match:
+            site_id = match.group(1)
+            res = query(self.server.dbfile, int(site_id), "site")
+            summary = f"""<html><head><title>Summary site {site_id}</title><meta charset="UTF-8"></head><body>
+            <h1>Summary site {site_id}</h1>
+            <table border=1>
+            <tr><th>support_id</th><th>antenna_id</th><th>antenna_type</th><th>ant_height</th>
+            <th>azimuth</th><th>station_name</th><th>operator</th><th>system</th><th>band</th></tr>"""
+            for support in res['supports']:
+                for antenna in support['antennas']:
+                    for transmitter in antenna['transmitters']:
+                        summary += f"""<tr>
+                        <td>{support['support_id']}</td>
+                        <td>{antenna['antenna_id']}</td>
+                        <td>{antenna['antenna_type']}</td>
+                        <td>{antenna['ant_height']}</td>
+                        <td>{antenna['azimuth']}</td>
+                        <td>{transmitter['station_name']}</td>
+                        <td>{transmitter['operator']}</td>
+                        <td>{transmitter['system']}</td>
+                        <td>{transmitter['band_kHz']}</td>
+                        </tr>"""
+            summary += """</table></body></html>"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            #self.wfile.write(summary.encode("utf-8"))
+            self.wfile.write(summary.encode("utf-8"))
             return
 
         # Otherwise 404
@@ -340,7 +375,7 @@ def gen_meta_json(dbfilename, jsonfile="meta.json"):
         "minmax": gen_minmax_json(dbfilename=dbfilename),
         "minmax_metro": gen_minmax_json(dbfilename=dbfilename, where='metro'),
         "minmax_overseas": gen_minmax_json(dbfilename=dbfilename, where='overseas'),
-        "syslist" : get_syslist(dbfilename)
+        "syslist" : get_id_table(dbfilename, 'id_systems')
     }
     with open(jsonfile, "w") as f:
         json.dump(metrics, f)
@@ -406,7 +441,7 @@ if __name__ == "__main__":
         if args.force or not exists(args.dbfile):
             import_anfr_zip(args.dbfile, dirpath=args.datadir)
     elif args.subcommand=='info':
-        res = query(args.dbfile, args.id, args.type)
+        res = json.dumps(query(args.dbfile, args.id, args.type), ensure_ascii=False)
         print(res)
     elif args.subcommand=='serve':
         if not exists(args.dbfile):
