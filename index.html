@@ -610,7 +610,7 @@ const sbBody     = document.getElementById('sidebar-body');
 const sbClose    = document.getElementById('sidebar-close');
 
 function openSidebar(siteId) {
-  sbTitle.textContent = `📡 Site ${siteId}`;
+  sbTitle.innerHTML = `📡 <a href="/summary/${siteId}" target="_blank">Site ${siteId}</a>`;
   sidebar.classList.add('open');
 }
 
